@@ -33,7 +33,7 @@ export function RechargesView() {
   const fund = f.fund === "all" ? "recharge" : f.fund;
   return (
     <>
-      <FilterBar fields={["subs", "fund", "q"]} subOwners={fx.subs} defaults={defaults} />
+      <FilterBar fields={["subs", "fund", "q"]} subOwners={fx.subs} defaults={defaults} mixed />
       <div className="px-3 md:px-4 py-3 flex flex-col gap-3">
         {f.mock === "error" ? <ErrorState path="/recharges" message="mock 故障注入" requestId="req-mock-error" />
           : liveOn && live.loading ? <PageSkeleton />
@@ -60,7 +60,7 @@ function Content({ f, fx, fund, rc, liveOn }: { f: Filters; fx: ReturnType<typeo
   }));
   return (
     <>
-      <PageHeader title="充值流水" unit={u} from={f.from} to={f.to} mock={f.mock} mixed />
+      <PageHeader title="充值流水" unit={u} from={f.from} to={f.to} />
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
         <Kpi size="lg" label="区间充值" value={formatFen(credit, u)} hint="不含已冲正" />
         <Kpi label="笔数" value={`${rc.length}`} hint={`有效 ${liveRows.length}`} />

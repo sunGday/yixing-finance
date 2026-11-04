@@ -75,7 +75,7 @@ function Queue({ f, tab, rows, all, subs }: { f: Filters; tab: ReconTab; rows: R
 
   return (
     <>
-      <PageHeader title="对账汇总" unit={unit} from={f.from} to={f.to} mock={f.mock} />
+      <PageHeader title="对账汇总" unit={unit} from={f.from} to={f.to} />
       <div role="tablist" aria-label="对账分区" className="flex gap-1 overflow-x-auto border-b">
         {TABS.map((t) => {
           const n = all.filter((x) => x.tab === t && x.status === "unmatched").length;

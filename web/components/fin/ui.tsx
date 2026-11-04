@@ -1,18 +1,39 @@
 import { cn } from "@/lib/utils";
 import { formatFen, unitLabel, type Unit } from "@/lib/format";
-import { sourceLabel } from "@/lib/source";
+import { sourceLabel, sourceTitle, wantsLive } from "@/lib/source";
 
 export function Money({ fen, unit, signed, tone }: { fen: number | null | undefined; unit: Unit; signed?: boolean; tone?: boolean }) {
   return <span className={cn("num", tone && fen != null && fen !== 0 && "text-danger font-medium")}>{formatFen(fen, unit, signed)}</span>;
 }
 
-export function PageHeader({ title, unit, from, to, mock, mixed }: { title: string; unit: Unit; from: string; to: string; mock?: string; mixed?: boolean }) {
+export function SourceChip({ mock, mixed, className }: { mock?: string; mixed?: boolean; className?: string }) {
+  const live = wantsLive(mock);
+  const tone = mock === "error" ? "danger" : !live ? "muted" : mixed ? "warning" : "info";
+  return (
+    <span
+      title={sourceTitle(mock, mixed)}
+      aria-label={`数据来源：${sourceLabel(mock, mixed)}`}
+      className={cn(
+        "inline-flex items-center h-7 shrink-0 rounded-full border px-2 text-[11px] whitespace-nowrap",
+        tone === "muted" && "bg-sunken text-muted-foreground",
+        tone === "info" && "bg-info-bg text-info border-info/30",
+        tone === "warning" && "bg-warning-bg text-warning border-warning/40",
+        tone === "danger" && "bg-danger-bg text-danger border-danger/30",
+        className,
+      )}
+    >
+      数据来源 · {sourceLabel(mock, mixed)}
+    </span>
+  );
+}
+
+export function PageHeader({ title, unit, from, to }: { title: string; unit: Unit; from: string; to: string }) {
   return (
     <div className="flex items-end justify-between gap-3">
       <div className="min-w-0">
         <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
         <p className="text-xs text-muted-foreground mt-0.5 truncate">
-          单位 {unitLabel(unit)} · {from} ~ {to} · {sourceLabel(mock, mixed)}
+          单位 {unitLabel(unit)} · {from} ~ {to}
         </p>
       </div>
       <span className="shrink-0 rounded border bg-sunken px-2 py-0.5 text-[11px] text-muted-foreground">只读</span>

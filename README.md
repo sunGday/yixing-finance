@@ -4,37 +4,45 @@
 
 ## How to open the UI
 
-### A) GitHub Pages（免安装）
+两套数据，不要混：
 
-静态演示：<https://sungday.github.io/yixing-finance/>
+| | 数据 | 打得到 `127.0.0.1:8787` 吗 |
+|---|---|---|
+| **GitHub Pages** | **fixtures 演示** | 不能 |
+| **本机 / Codespaces** | **真数据**（默认） | 能，只要 mario 在 8787 |
 
-路由：`/` 概览 · `/recharges/` 充值 · `/revenues/` 收入 · `/reconcile/` 对账。数据来自 `web/fixtures`（与 `?mock=1` 相同）。Pages 访问不到本机 `127.0.0.1:8787`。
+页面角标写着 `数据来源 · 演示 fixtures` 或 `数据来源 · 真数据`。`?mock=1` 强制演示，`?mock=error` 看故障卡。
 
-发布：推到 `main` 后，[`.github/workflows/pages.yml`](.github/workflows/pages.yml) 在 `web/` 执行 `npm run build:pages`（`output: 'export'`，`basePath=/yixing-finance`）并部署。
+### A) GitHub Pages = 演示 fixtures
 
-**一次性开关**（Actions 不能替仓库改这项）：GitHub 仓库 **Settings → Pages → Build and deployment → Source** 选 **GitHub Actions**。保存后再推 `main`，或在 Actions 页重跑 “GitHub Pages”。
+<https://sungday.github.io/yixing-finance/>
 
-### B) 本机
+路由：`/` 概览 · `/recharges/` 充值 · `/revenues/` 收入 · `/reconcile/` 对账。数字来自 `web/fixtures`，和 `?mock=1` 同一条路径。Pages **到不了** 本机 `:8787`。
+
+发布：推到 `main` 后，[`.github/workflows/pages.yml`](.github/workflows/pages.yml) 跑 `npm run build:pages`（`STATIC_EXPORT=1`，`output: 'export'`，`basePath=/yixing-finance`）。这个构建**不注入** `NEXT_PUBLIC_FINANCE_API_BASE`。
+
+**一次性开关**（Actions 改不了这项）：**Settings → Pages → Build and deployment → Source** 选 **GitHub Actions**。
+
+### B) 真数据 = 本机两步
+
+先起 mario，再开页面。`next dev` 默认把浏览器的 `/api/v1` 反代到 `http://127.0.0.1:8787/api/v1`，不用再配 `.env.local`。
 
 ```bash
+pip install -r requirements.txt
+uvicorn main:app --host 127.0.0.1 --port 8787
+
 cd web && npm i && npm run dev
 ```
 
-打开 <http://localhost:3000>。默认 fixtures。
+打开 <http://localhost:3000>。角标应为「真数据」。8787 未启动时页面给出拉取失败，而不是悄悄退回样例。
 
-接本机 API：把 `web/.env.example` 复制为 `web/.env.local`，设置 `NEXT_PUBLIC_FINANCE_API_BASE=/api/v1`。`next dev` 把该路径反代到 `FINANCE_API_INTERNAL_BASE`（默认 `http://127.0.0.1:8787/api/v1`）。`?mock=1` 强制 fixtures，`?mock=error` 看错误态。不要提交 `.env.local`。
+要看演示数字：地址加 `?mock=1`。可选：复制 `web/.env.example` 为 `web/.env.local` 只为改前缀或代理目标。不要提交 `.env.local`。
 
-### C) Codespaces
+### C) Codespaces（同样是真数据）
 
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/sunGday/yixing-finance?quickstart=1)
 
-容器创建时会 `npm ci --prefix web`（见 `.devcontainer/devcontainer.json`），并转发 3000。创建完成后：
-
-```bash
-cd web && npm run dev
-```
-
-Ports 面板打开 3000。需要 API 时同样使用 `.env.local`，并把 8787 指到本机进程。
+容器会 `npm ci --prefix web`（见 `.devcontainer/devcontainer.json`），并转发 3000 和 8787。创建完成后同样两步：先 `uvicorn main:app --host 127.0.0.1 --port 8787`，再 `cd web && npm run dev`。
 
 前端说明：[`web/DESIGN.md`](web/DESIGN.md)、[`web/VISUAL.md`](web/VISUAL.md)、[`docs/IA.md`](docs/IA.md)。截图在 [`web/docs/screenshots/`](web/docs/screenshots/)。
 
@@ -44,7 +52,7 @@ Ports 面板打开 3000。需要 API 时同样使用 `.env.local`，并把 8787 
 
 ```bash
 pip install -r requirements.txt
-FIN_API_TOKEN=devtoken uvicorn main:app --host 0.0.0.0 --port 8787
+uvicorn main:app --host 127.0.0.1 --port 8787
 python3 -m unittest discover -s tests -t . -v
 ```
 
@@ -53,6 +61,7 @@ python3 -m unittest discover -s tests -t . -v
 - CORS：`FIN_CORS_ORIGINS`（逗号分隔，默认 `*`，上线前收紧）
 - 充值：只读 Omni billHis JSONL（自动搜 `../**/billHis-1001108443-*.jsonl`，或 `FIN_RECHARGE_JSONL`）
 - 收入：无 `PANGLE_*` / `YLH_*` → `source:"mock"` + `gap_flags: credential_missing:*`。`?strict=true` 或 `FIN_REVENUE_MOCK=0` → 503 `50301`。mock 不进对账
+- 概览和充值页在真数据下仍用 fixtures 画消耗与余额快照（这两个接口是空 stub）
 
 ## 已锁定口径
 

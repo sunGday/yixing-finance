@@ -34,7 +34,7 @@ export function OverviewView() {
 
   return (
     <>
-      <FilterBar fields={["subs", "network"]} subOwners={fx.subs} />
+      <FilterBar fields={["subs", "network"]} subOwners={fx.subs} mixed />
       <Body f={f} fx={fx} liveOn={liveOn} live={live} />
     </>
   );
@@ -78,7 +78,7 @@ function Body({ f, fx, liveOn, live }: {
 
   return (
     <div className="px-3 md:px-4 py-3 flex flex-col gap-3">
-      <PageHeader title="概览" unit={u} from={f.from} to={f.to} mock={f.mock} mixed />
+      <PageHeader title="概览" unit={u} from={f.from} to={f.to} />
       {part > 0 && <Banner tone="warning">部分匹配 {part} 条（缺快照或结算未出），合计可能不完整。</Banner>}
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-2">
         <Link href={hrefFor("/recharges", f, { fund: "recharge" })} className={linkCls}>

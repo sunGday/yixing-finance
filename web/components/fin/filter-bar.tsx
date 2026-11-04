@@ -9,14 +9,15 @@ import { AGENCY_OWNER_ID, type SubOwner } from "@/lib/types";
 import type { Filters } from "@/lib/filters";
 import { patchQuery, useFilters } from "@/lib/url-state";
 import { cn } from "@/lib/utils";
+import { SourceChip } from "./ui";
 import { ThemeToggle } from "./theme";
 
 type Field = "fund" | "network" | "status" | "subs" | "q";
 const QUICK = [["yesterday", "昨日"], ["7d", "近7日"], ["week", "本周"], ["month", "本月"]] as const;
 const sel = "h-8 rounded-md border bg-surface px-2 text-xs focus-visible:outline-2 focus-visible:outline-brand";
 
-export function FilterBar({ fields, subOwners, defaults = {} }: {
-  fields: Field[]; subOwners: SubOwner[]; defaults?: Partial<Filters>;
+export function FilterBar({ fields, subOwners, defaults = {}, mixed = false }: {
+  fields: Field[]; subOwners: SubOwner[]; defaults?: Partial<Filters>; mixed?: boolean;
 }) {
   const f = useFilters(defaults);
   const [open, setOpen] = useState(false);
@@ -103,13 +104,17 @@ export function FilterBar({ fields, subOwners, defaults = {} }: {
 
   return (
     <div className="sticky top-0 z-20 border-b bg-background/95 backdrop-blur px-3 md:px-4 py-1.5">
-      <div className="hidden md:block">{controls(false)}</div>
+      <div className="hidden md:flex items-start gap-2">
+        <div className="min-w-0 flex-1">{controls(false)}</div>
+        <SourceChip mock={f.mock} mixed={mixed} />
+      </div>
       <div className="md:hidden flex items-center gap-2">
         <Button variant="outline" className="h-9 shrink-0" onClick={() => setOpen(true)}><SlidersHorizontal className="size-4" />筛选</Button>
         <div className="flex gap-1 overflow-x-auto">
           {chips.map((c) => <span key={c} className="shrink-0 rounded-full border bg-surface px-2 py-1 text-[11px]">{c}</span>)}
         </div>
-        <ThemeToggle className="ml-auto h-9 shrink-0 rounded-md border px-2 text-xs" />
+        <SourceChip mock={f.mock} mixed={mixed} className="ml-auto" />
+        <ThemeToggle className="h-9 shrink-0 rounded-md border px-2 text-xs" />
       </div>
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent side="bottom" className="max-h-[85dvh] overflow-y-auto">
