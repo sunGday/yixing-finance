@@ -140,3 +140,10 @@
 - **优量汇**：URL `api.adnet.qq.com/...` / token 算法 **待复核**。env `YLH_MEMBER_ID` `YLH_SECRET`（兼容 `GDT_*`）。
 - 充值源：`sources/omni_billhis.py` 复用 `oppo_omni.finance.to_txn`，只读。
 - 参考：OpenMediation OM-ADC、Revenue-Recon（仅借鉴公开设计）。
+
+## 实现差异（v0.3 实装）
+- `/recharges` 每行多 `side`（`omni_parent_in|platform_direct|transfer_out|reclaim_in`）与 `to_owner_name`；`data` 附 basis 字段与 `source`。可传 `side=` 过滤。
+- `/recharges/summary` 增 `total_amount_fen`（仅主口径）、`side_items[]`（旁报，不并入）。
+- `/revenues` 增 `source`(mock|live)、`verified:false`、`gap_flags`、`auth_note`；`strict=true` 无凭证 → 50301。
+- `/reconcile/summaries` 仅 `granularity=day`；期初/期末余额、消耗、子户层未接入 → 对应侧 null + gap_flags；mock 收入不参与对账。
+- `/costs`、`/snapshots` 为 stub（空 items + gap_flags）。

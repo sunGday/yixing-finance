@@ -15,3 +15,16 @@
 `FIN_API_TOKEN`；`PANGLE_USER_ID` `PANGLE_ROLE_ID` `PANGLE_SECURE_KEY`；`YLH_MEMBER_ID` `YLH_SECRET`（别名 `GDT_MEMBER_ID` `GDT_SECRET`）；Omni 沿用既有 `oppo-omniapi` 配置。
 
 ⚠ 穿山甲/优量汇 endpoint 与签名算法均为「待复核」占位。
+
+## 运行 API（v0.3 · FastAPI）
+```bash
+cd /workspace/team/mario-backend/yixing-finance
+pip install -r requirements.txt
+FIN_API_TOKEN=devtoken uvicorn main:app --host 0.0.0.0 --port 8787
+```
+- Base URL（同机）：`http://127.0.0.1:8787/api/v1`；端点 `health` `recharges` `recharges/summary` `revenues` `reconcile/summaries` `costs`(stub) `snapshots`(stub)
+- 鉴权：`Authorization: Bearer $FIN_API_TOKEN`；未设 env → 开发放行并回 `X-Auth-Mode: open-dev`；错/缺 token → 401 `40101`
+- CORS：`FIN_CORS_ORIGINS`（逗号分隔，默认 `*`，上线前收紧）
+- 充值数据：只读 Omni billHis JSONL 缓存（自动搜 `../**/billHis-1001108443-*.jsonl`，或 `FIN_RECHARGE_JSONL` 指定）
+- 收入：无 PANGLE_*/YLH_* → 返回 `source:"mock"` + `gap_flags: credential_missing:*`；`?strict=true` 或 `FIN_REVENUE_MOCK=0` → 503 `50301`；mock 不进对账
+- 单测：`python3 -m unittest discover -s tests -t . -v`
