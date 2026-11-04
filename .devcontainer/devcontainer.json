@@ -1,0 +1,16 @@
+{
+  "name": "yixing-finance",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm",
+  "forwardPorts": [3000, 8787],
+  "portsAttributes": {
+    "3000": {
+      "label": "web",
+      "onAutoForward": "notify"
+    },
+    "8787": {
+      "label": "mario-api",
+      "onAutoForward": "silent"
+    }
+  },
+  "postCreateCommand": "npm ci --prefix web"
+}
