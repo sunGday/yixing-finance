@@ -8,7 +8,7 @@ from adapters.base import normalize_network, SETTLEMENT_STATUS
 from reconcile import RECON_TABS, agency_daily, revenue_dedup, gross_profit_draft, daily_fund_equation
 import store as st
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 router = APIRouter(prefix="/api/v1")
 
 
@@ -52,7 +52,8 @@ def health(req: Request):
     return ok({"ok": True, "version": VERSION, "recharge_source": s.source, "recharge_rows": len(s.rows),
                "recharge_files": getattr(s, "files", []), "cost_days": len(req.app.state.costs.days),
                "snapshot_days": len(req.app.state.snapshots.days), "last_refresh": read_meta(),
-               "auth_mode": "token" if os.environ.get("FIN_API_TOKEN") else "open-dev"})
+               "auth_mode": "token" if os.environ.get("FIN_API_TOKEN") else "open-dev",
+               "credentials": req.app.state.credentials.statuses()})
 
 
 @router.get("/recharges")
@@ -213,3 +214,53 @@ def admin_refresh(req: Request, kind: str, start_date: str | None = None, end_da
     except RuntimeError as x:
         raise ApiError(50301, 503, f"omni credentials unavailable: {str(x)[:120]}")
     reload_state(req.app); return ok({"kind": kind, "result": r})
+
+
+# ---- 收入渠道凭证（t294u）：脱敏读、写入 FIN_SECRETS_DIR、热加载进 os.environ ----
+from credentials_store import CredentialInputError, schema as cred_schema  # noqa: E402
+
+
+def _cred(fn, *a):
+    try: return fn(*a)
+    except CredentialInputError as e: raise ApiError(e.code, 400, str(e))
+
+
+async def _cred_body(req: Request):
+    try: b = await req.json()
+    except Exception: raise ApiError(40001, 400, "body must be JSON {\"fields\": {...}}")
+    if not isinstance(b, dict) or "fields" not in b: raise ApiError(40001, 400, "body must be {\"fields\": {KEY: value}}")
+    return b["fields"]
+
+
+@router.get("/credentials/schema")
+def credentials_schema():
+    return ok({"channels": cred_schema()})
+
+
+@router.get("/credentials")
+def credentials_list(req: Request):
+    return ok(req.app.state.credentials.list())
+
+
+@router.get("/credentials/{channel}")
+def credentials_get(req: Request, channel: str):
+    return ok(_cred(req.app.state.credentials.describe, channel))
+
+
+@router.put("/credentials/{channel}")
+async def credentials_put(req: Request, channel: str):
+    """整渠道替换：body 中的键即该渠道全部文件凭证（未给的键从文件移除）。"""
+    fields = await _cred_body(req)
+    return ok(_cred(req.app.state.credentials.upsert, channel, fields, True))
+
+
+@router.patch("/credentials/{channel}")
+async def credentials_patch(req: Request, channel: str):
+    """部分更新：未出现的键保留，空串清除该键。"""
+    fields = await _cred_body(req)
+    return ok(_cred(req.app.state.credentials.upsert, channel, fields, False))
+
+
+@router.delete("/credentials/{channel}")
+def credentials_delete(req: Request, channel: str):
+    return ok(_cred(req.app.state.credentials.delete, channel))

@@ -26,3 +26,18 @@ Pages https://sungday.github.io/yixing-finance/ = **静态 fixtures**（非实�
 
 ## 启动
 `cd yixing-finance && nohup uvicorn main:app --host 0.0.0.0 --port 8787 > /tmp/yixing-finance.log 2>&1 &`
+
+## 收入渠道凭证（v0.5 · t294u）
+Pangle/YLH 凭证经 API 录入（UI：jack `/settings/credentials`，schema 驱动），**不进 git、不进日志、GET 永不回显明文**。
+- 存储：`$FIN_SECRETS_DIR/revenue-credentials.json`（file 0600，dir 0700，原子写）。`FIN_SECRETS_DIR` 未设时：`/var/lib/yixing-finance/secrets` 存在则用之，否则 box 用 `/home/box/.secrets/yixing-finance`（首次写入自动创建）。
+- 可选加密：`FIN_CREDENTIALS_KEY`（Fernet key，`python3 -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())"`）；设了就整文件加密，**丢 key = 需重录凭证**。key 只放 env，不与文件同目录。
+- 优先级：**进程 env > 文件**（运维可用 env 紧急覆盖；GET 中该字段 `source:"env"`、`overridden_by_env:true`）。写入/删除后热加载进当前进程，无需重启。
+- 查看状态：`GET /api/v1/health` → `credentials:{pangle,ylh}` = `configured|partial|missing`。
+- 录入（有 token 时加 `-H "Authorization: Bearer $FIN_API_TOKEN"`）：
+```
+curl -XPUT   $B/credentials/pangle -H 'Content-Type: application/json' -d '{"fields":{"PANGLE_USER_ID":"…","PANGLE_ROLE_ID":"…","PANGLE_SECURE_KEY":"…"}}'
+curl -XPATCH $B/credentials/ylh    -H 'Content-Type: application/json' -d '{"fields":{"YLH_SECRET":""}}'   # 空串=清除
+curl -XDELETE $B/credentials/pangle
+```
+- 凭证齐全后 `/revenues` 去掉 `credential_missing:*`，但仍为 `live_fetch_unverified:*`（endpoint/签名待复核，未开真 HTTP）→ **收入仍不关账**。
+- ECS：`sudo install -d -m 700 -o <api运行用户> /var/lib/yixing-finance/secrets`；docker 挂 `/var/lib/yixing-finance/secrets:/data/secrets` + `FIN_SECRETS_DIR=/data/secrets`；systemd(www-data) 则 `chown www-data` 该目录。备份时按密钥对待。

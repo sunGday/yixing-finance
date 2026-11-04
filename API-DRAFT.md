@@ -153,3 +153,10 @@
 - `/snapshots`（v0.4 live）：代理商 customer/list 子户 totalBalance（分）；`agency_balance_unavailable`、`historical_balance_before_first_snapshot`。
 - 新增 `POST /api/v1/admin/refresh/{recharges|snapshot|costs}?start_date&end_date`（只读拉 Omni→落盘→重载；costs ≤7 天/次）、`POST /api/v1/admin/reload`；CORS 放开 POST。
 - 收入：`/home/box/.secrets` 无 PANGLE_*/YLH_*/GDT_* → `credential_missing:pangle|ylh`（BLOCKED，见 handoff）。
+
+## 5. 收入渠道凭证（v0.5 实装 · t294u）
+`GET /credentials/schema`｜`GET /credentials`｜`GET|PUT|PATCH|DELETE /credentials/{channel}`（`pangle|ylh`，别名 `csj|gdt`）。
+Body `{"fields":{KEY:value}}`；字段别名 `GDT_MEMBER_ID/GDT_SECRET`→`YLH_*`。PUT=整渠道替换（未给的键移除）；PATCH=部分，`""` 清除。
+响应 `{channel,label,status:configured|partial|missing,updated_at(+08:00),fields:[{key,label,secret,required,set,hint,source:file|env|none,overridden_by_env}]}`；secret hint 恒 `••••`，非 secret `首1***末2`（≤4 位 `****`）。
+错误：未知 channel/field `40002`；body 非 `{fields:{str:str}}`/含换行/超 4096 `40001`；鉴权同全局（40101/50302）。CORS 已放开 PUT/PATCH/DELETE。
+存储与优先级见 OPS.md「收入渠道凭证」。
