@@ -56,6 +56,7 @@ async function proxy(req: NextRequest, parts: string[]) {
 
   const method = req.method.toUpperCase();
   const url = targetUrl(parts, new URL(req.url).search);
+  // PUT/PATCH/DELETE bodies (including /credentials) are forwarded raw. Do not log them.
   let upstream: Response;
   try {
     upstream = await fetch(url, {

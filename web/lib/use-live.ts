@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { LoadError } from "./errors";
 
-export type LiveError = { path: string; message: string; requestId?: string };
+export type LiveError = { path: string; message: string; requestId?: string; code?: number; gapFlags?: string[] };
 export type LiveJob = { key: string; path: string; params: Record<string, string | undefined> };
 
 /**
@@ -35,7 +35,10 @@ export function useLiveMap(enabled: boolean, jobs: LiveJob[]) {
       } catch (e) {
         if (cancel) return;
         if (e instanceof LoadError) {
-          setState({ loading: false, error: { path: e.path, message: e.message, requestId: e.request_id } });
+          setState({
+            loading: false,
+            error: { path: e.path, message: e.message, requestId: e.request_id, code: e.code, gapFlags: e.gap_flags },
+          });
         } else {
           setState({ loading: false, error: { path: "(network)", message: String(e) } });
         }

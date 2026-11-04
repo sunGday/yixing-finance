@@ -26,8 +26,10 @@ services:
       FIN_CORS_ORIGINS: "https://yunrong.ink,https://www.yunrong.ink"
       FIN_REVENUE_MOCK: "0"
       FIN_DATA_DIR: /data/finance
+      FIN_SECRETS_DIR: /data/secrets
     volumes:
       - /var/lib/yixing-finance/finance:/data/finance
+      - /var/lib/yixing-finance/secrets:/data/secrets
     expose: ["8787"]
     networks:
       edge:

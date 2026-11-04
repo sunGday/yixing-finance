@@ -1,12 +1,15 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { FilterBar } from "@/components/fin/filter-bar";
 import { ErrorState, StatusChip } from "@/components/fin/bits";
+import { CredentialGapBanner } from "@/components/fin/credential-gap";
 import { PageSkeleton } from "@/components/fin/page-skeleton";
 import { Banner, Empty, Kpi, Money, PageHeader, Responsive, SplitBar } from "@/components/fin/ui";
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { loadRevenueBundle } from "@/lib/fx/revenues";
 import { formatFen } from "@/lib/format";
+import { clearRevenueCredRetry, isCredentialGap, takeRevenueCredRetry } from "@/lib/credentials";
 import { selectRevenues, sum } from "@/lib/select";
 import { wantsLive } from "@/lib/source";
 import { LABEL, type Revenue } from "@/lib/types";
@@ -36,6 +39,14 @@ export function RevenuesView() {
   const paid = rv.filter((r) => r.settlement_status === "paid").length;
   const pg = sum(rv.filter((r) => r.ad_network === "pangle"), (r) => r.amount_fen);
   const yl = sum(rv.filter((r) => r.ad_network === "ylh"), (r) => r.amount_fen);
+  const [credRetry, setCredRetry] = useState(false);
+  useEffect(() => { setCredRetry(takeRevenueCredRetry()); }, []);
+  useEffect(() => {
+    if (!credRetry || !live.data) return;
+    clearRevenueCredRetry();
+    setCredRetry(false);
+  }, [credRetry, live.data]);
+  const credentialGap = !!(liveOn && live.error && isCredentialGap(live.error));
 
   return (
     <>
@@ -43,7 +54,8 @@ export function RevenuesView() {
       <div className="px-3 md:px-4 py-3 flex flex-col gap-3">
         {f.mock === "error" ? <ErrorState path="/revenues" message="mock 故障注入" requestId="req-mock-error" />
           : liveOn && live.loading ? <PageSkeleton />
-          : liveOn && live.error ? <ErrorState {...live.error} onRetry={live.retry} />
+          : credentialGap && live.error ? <CredentialGapBanner message={live.error.message} requestId={live.error.requestId} gapFlags={live.error.gapFlags} onRetry={live.retry} showSync={credRetry} />
+          : liveOn && live.error ? <ErrorState path={live.error.path} message={live.error.message} requestId={live.error.requestId} onRetry={live.retry} />
           : <>
             <PageHeader title="收入流水" unit={u} from={f.from} to={f.to} />
             <Banner tone="info">默认含预估与结算。关账以结算为准。</Banner>
