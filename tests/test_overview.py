@@ -145,6 +145,37 @@ class OverviewT(unittest.TestCase):
                          [("pangle", "42", "7", 1000)])
         self.assertNotIn("networks", detail)
 
+    def test_gromore_day_cache_and_secret(self):
+        self._ov(**{"from": "2026-11-03", "to": "2026-11-03"})
+        mid = len(self.calls)
+        self.assertGreaterEqual(mid, 2)
+        again = self._ov(**{"from": "2026-11-03", "to": "2026-11-03"})
+        self.assertEqual(len(self.calls), mid)
+        self.assertEqual(again["total_fen"], 1340359)
+        blob = repr(self.client._days)
+        self.assertNotIn(FAKE["PANGLE_SECURE_KEY"], blob)
+        self.assertNotIn("sign", blob)
+        self._ov(**{"from": "2026-11-01", "to": "2026-11-03"})
+        self.assertGreater(len(self.calls), mid)
+        after = len(self.calls)
+        self.client.clear_cache()
+        self._ov(**{"from": "2026-11-03", "to": "2026-11-03"})
+        self.assertGreater(len(self.calls), after)
+
+    def test_gromore_error_is_not_cached(self):
+        calls = {"n": 0}
+
+        def boom(url, params):
+            calls["n"] += 1
+            raise GroMoreFetchError("http error")
+
+        client = GroMoreClient(env=FAKE, getter=boom, cache_ttl=90)
+        with self.assertRaises(GroMoreFetchError):
+            client.fetch("2026-11-03", "2026-11-03")
+        with self.assertRaises(GroMoreFetchError):
+            client.fetch("2026-11-03", "2026-11-03")
+        self.assertEqual(calls["n"], 2)
+
     def test_unknown_code_gap_not_fake_name(self):
         d = self._ov(**{"from": "2026-11-02", "to": "2026-11-03"})
         self.assertEqual(d["total_fen"], 1340359 + 100)

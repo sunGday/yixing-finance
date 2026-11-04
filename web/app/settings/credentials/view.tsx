@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Banner, Empty, Panel } from "@/components/fin/ui";
 import { PageSkeleton } from "@/components/fin/page-skeleton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { LoadError } from "@/lib/errors";
+import { liveDropPrefix } from "@/lib/live-cache";
 import {
   type ChannelSchema,
   type ChannelStatus,
@@ -37,23 +38,30 @@ export function CredentialsView() {
   const [notice, setNotice] = useState<string | null>(null);
   const [tone, setTone] = useState<"info" | "warning">("info");
   const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const hasSchema = useRef(false);
+  hasSchema.current = schema.length > 0;
 
   useEffect(() => {
     if (FIXTURES) return;
+    const ac = new AbortController();
     let cancel = false;
-    setLoading(true);
+    const hadSchema = hasSchema.current;
+    setLoading(!hadSchema);
+    setRefreshing(hadSchema);
     (async () => {
       try {
         const api = await import("@/lib/credentials-api");
-        const nextSchema = await api.fetchCredentialSchema();
+        const nextSchema = await api.fetchCredentialSchema(ac.signal);
         if (cancel) return;
         let nextStatus: ChannelStatus[] = [];
         let statusMissing = false;
         try {
-          const listed = await api.fetchCredentials(nextSchema);
+          const listed = await api.fetchCredentials(nextSchema, ac.signal);
           nextStatus = listed.channels;
           if (!cancel) setStorage(listed.storage);
         } catch (err) {
+          if (ac.signal.aborted || cancel) return;
           if (!isCredentialsUnavailable(err)) throw err;
           statusMissing = true;
           nextStatus = nextSchema.map((channel) => ({
@@ -74,10 +82,10 @@ export function CredentialsView() {
           setNotice("schema 已返回。状态接口还没有数据，字段先按未配置显示。");
         }
       } catch (err) {
-        if (cancel) return;
+        if (cancel || ac.signal.aborted) return;
         if (isCredentialsUnavailable(err)) {
           setUnavailable(true);
-          setSchema([]);
+          if (!hadSchema) setSchema([]);
         } else {
           setTone("warning");
           setNotice(err instanceof LoadError ? err.message : "读取凭证接口失败");
@@ -85,11 +93,12 @@ export function CredentialsView() {
       } finally {
         if (!cancel) {
           setLoading(false);
+          setRefreshing(false);
           setBusy(false);
         }
       }
     })();
-    return () => { cancel = true; };
+    return () => { cancel = true; ac.abort(); };
   }, [tick]);
 
   async function reload() {
@@ -107,6 +116,8 @@ export function CredentialsView() {
       else await api.patchCredentialChannel(id, fields);
       setTone("info");
       setNotice(mode === "delete" ? "已删除该渠道凭证。密钥不会回显。" : "已提交到财务 API。密钥不会回显。");
+      liveDropPrefix("/revenues");
+      liveDropPrefix("/credentials");
       if (retry) {
         markRevenueCredRetry();
         router.push(keptHref("/revenues", search));
@@ -136,6 +147,7 @@ export function CredentialsView() {
       </Banner>
       {storage ? <StorageLine storage={storage} /> : null}
       {loading ? <PageSkeleton /> : null}
+      {refreshing ? <p role="status" className="text-[11px] text-brand">重新读取中，表单先留着。</p> : null}
       {!loading && unavailable ? (
         <Empty
           title="财务 API 还没有凭证接口"

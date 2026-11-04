@@ -18,6 +18,7 @@ Allen 2026-11-03 实测 `csj-cli report gromore-daily`
 from __future__ import annotations
 import datetime as dt
 import os
+import threading
 import time
 
 from adapters.base import CredentialMissingError, yuan_to_fen
@@ -176,11 +177,23 @@ def _default_get(url: str, params: dict) -> dict:
 
 
 class GroMoreClient:
-    def __init__(self, env: dict | None = None, getter=None, limit: int = 100, base: str | None = None):
+    def __init__(self, env: dict | None = None, getter=None, limit: int = 100, base: str | None = None,
+                 cache_ttl: float = 90.0):
         self._env = env
         self._getter = getter or _default_get
         self.limit = limit
         self._base = base
+        # 按自然日记住已映射的行。重叠区间（本年、昨日、卡片）不再重复打穿山甲。
+        # 键只有 user_id / role_id，不放 secure key。失败不写入。
+        self._cache_ttl = cache_ttl
+        self._lock = threading.Lock()
+        self._gen = 0
+        self._days: dict[tuple, dict[str, tuple[float, list]]] = {}
+
+    def clear_cache(self) -> None:
+        with self._lock:
+            self._gen += 1
+            self._days.clear()
 
     def _environ(self) -> dict:
         return self._env if self._env is not None else os.environ
@@ -210,14 +223,89 @@ class GroMoreClient:
     def fetch(self, start: str, end: str) -> tuple[list[dict], list[str]]:
         """返回 (rows, gap_flags)。rows 为已映射的 date×network 分。无凭证抛 CredentialMissingError。"""
         creds = PangleAdapter(env=self._environ()).credentials()
+        if start > end:
+            return [], []
         url = self._base_url() + PATH
+        if self._cache_ttl <= 0:
+            return self._fetch_uncached(url, creds, start, end)
+        ns = (str(creds["PANGLE_USER_ID"]), str(creds["PANGLE_ROLE_ID"]))
+        with self._lock:
+            gen = self._gen
+        now = time.monotonic()
+        for shard_start, shard_end in self._missing_shards(ns, start, end, now):
+            gaps: list[str] = []
+            rows = self._fetch_shard(url, creds, shard_start, shard_end, gaps)
+            self._store_span(ns, shard_start, shard_end, rows, now, gen)
+        return self._read_span(ns, start, end, now)
+
+    def _fetch_uncached(self, url, creds, start: str, end: str) -> tuple[list[dict], list[str]]:
         out: list[dict] = []
         gaps: list[str] = []
         for shard_start, shard_end in iter_shards(start, end):
             out.extend(self._fetch_shard(url, creds, shard_start, shard_end, gaps))
-        # 分片边界外的行丢掉，避免上游多给一天造成双计
         kept = [r for r in out if start <= r["stat_date"] <= end]
         return kept, sorted(set(gaps))
+
+    def _missing_shards(self, ns: tuple, start: str, end: str, now: float):
+        missing: list[str] = []
+        with self._lock:
+            bucket = self._days.get(ns, {})
+            day = dt.date.fromisoformat(start)
+            last = dt.date.fromisoformat(end)
+            while day <= last:
+                iso = day.isoformat()
+                hit = bucket.get(iso)
+                if not hit or now - hit[0] >= self._cache_ttl:
+                    missing.append(iso)
+                day += dt.timedelta(days=1)
+        if not missing:
+            return []
+        spans: list[tuple[str, str]] = []
+        begin = prev = missing[0]
+        for iso in missing[1:]:
+            nxt = (dt.date.fromisoformat(prev) + dt.timedelta(days=1)).isoformat()
+            if iso == nxt:
+                prev = iso
+                continue
+            spans.append((begin, prev))
+            begin = prev = iso
+        spans.append((begin, prev))
+        shards = []
+        for span_start, span_end in spans:
+            shards.extend(iter_shards(span_start, span_end))
+        return shards
+
+    def _store_span(self, ns: tuple, start: str, end: str, rows: list[dict], now: float, gen: int) -> None:
+        by: dict[str, list] = {}
+        for row in rows:
+            by.setdefault(row["stat_date"], []).append(dict(row))
+        with self._lock:
+            if gen != self._gen:
+                return
+            bucket = self._days.setdefault(ns, {})
+            day = dt.date.fromisoformat(start)
+            last = dt.date.fromisoformat(end)
+            while day <= last:
+                iso = day.isoformat()
+                bucket[iso] = (now, by.get(iso, []))
+                day += dt.timedelta(days=1)
+            if len(bucket) > 420:
+                for old in sorted(bucket)[: len(bucket) - 400]:
+                    bucket.pop(old, None)
+
+    def _read_span(self, ns: tuple, start: str, end: str, now: float) -> tuple[list[dict], list[str]]:
+        rows: list[dict] = []
+        with self._lock:
+            bucket = self._days.get(ns, {})
+            day = dt.date.fromisoformat(start)
+            last = dt.date.fromisoformat(end)
+            while day <= last:
+                hit = bucket.get(day.isoformat())
+                if hit and now - hit[0] < self._cache_ttl:
+                    rows.extend(dict(item) for item in hit[1])
+                day += dt.timedelta(days=1)
+        gaps = sorted({row["gap"] for row in rows if row.get("gap")})
+        return rows, gaps
 
     def _fetch_shard(self, url, creds, start, end, gaps) -> list[dict]:
         offset = 0

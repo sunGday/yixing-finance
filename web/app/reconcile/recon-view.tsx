@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { FilterBar } from "@/components/fin/filter-bar";
-import { ErrorState, StatusChip } from "@/components/fin/bits";
+import { ErrorState, StaleNote, StatusChip } from "@/components/fin/bits";
 import { PageSkeleton } from "@/components/fin/page-skeleton";
 import { Kpi, PageHeader } from "@/components/fin/ui";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -13,7 +13,7 @@ import { formatFen, type Unit } from "@/lib/format";
 import { rangeParams, selectRecon } from "@/lib/select";
 import { wantsLive } from "@/lib/source";
 import { LABEL, type ReconRow, type ReconTab, type SubOwner } from "@/lib/types";
-import { patchQuery, useFilters, useQueryString } from "@/lib/url-state";
+import { patchQuery, useFilters, useHeldRange, useQueryString } from "@/lib/url-state";
 import { useLiveMap } from "@/lib/use-live";
 import { cn } from "@/lib/utils";
 
@@ -44,8 +44,10 @@ export function ReconcileView() {
   const fx = loadReconBundle(f);
   const liveOn = wantsLive(f.mock);
   const live = useLiveMap(liveOn, [{ key: "re", path: "/reconcile/summaries", params: rangeParams(f) }]);
+  const held = useHeldRange(live.data, f.from, f.to, liveOn);
+  const ff = { ...f, from: held.from, to: held.to };
   const bundle = liveOn && live.data
-    ? { subs: fx.subs, all: selectRecon(live.data.re as ReconRow[], { ...f, status: "all" }), rows: selectRecon(live.data.re as ReconRow[], f) }
+    ? { subs: fx.subs, all: selectRecon(live.data.re as ReconRow[], { ...ff, status: "all" }), rows: selectRecon(live.data.re as ReconRow[], ff) }
     : fx;
 
   return (
@@ -53,15 +55,18 @@ export function ReconcileView() {
       <FilterBar fields={["subs", "status", "q"]} subOwners={fx.subs} defaults={defaults} />
       <div className="px-3 md:px-4 py-3 flex flex-col gap-3">
         {f.mock === "error" ? <ErrorState path="/reconcile/summaries" message="mock 故障注入" requestId="req-mock-error" />
-          : liveOn && live.loading ? <PageSkeleton />
-          : liveOn && live.error ? <ErrorState {...live.error} onRetry={live.retry} />
-          : <Queue f={f} tab={tab} rows={bundle.rows} all={bundle.all} subs={bundle.subs} />}
+          : liveOn && live.loading && !live.data ? <PageSkeleton />
+          : liveOn && live.error && !live.data ? <ErrorState {...live.error} onRetry={live.retry} />
+          : <>
+            {live.error && live.data ? <StaleNote message={live.error.message} onRetry={live.retry} /> : null}
+            <Queue f={f} tab={tab} rows={bundle.rows} all={bundle.all} subs={bundle.subs} refreshing={live.refreshing} />
+          </>}
       </div>
     </>
   );
 }
 
-function Queue({ f, tab, rows, all, subs }: { f: Filters; tab: ReconTab; rows: ReconRow[]; all: ReconRow[]; subs: SubOwner[] }) {
+function Queue({ f, tab, rows, all, subs, refreshing = false }: { f: Filters; tab: ReconTab; rows: ReconRow[]; all: ReconRow[]; subs: SubOwner[]; refreshing?: boolean }) {
   const [open, setOpen] = useState<ReconRow | null>(null);
   const list = rows.filter((x) => x.tab === tab);
   const scoped = all.filter((x) => x.tab === tab);
@@ -75,7 +80,7 @@ function Queue({ f, tab, rows, all, subs }: { f: Filters; tab: ReconTab; rows: R
 
   return (
     <>
-      <PageHeader title="对账汇总" unit={unit} from={f.from} to={f.to} />
+      <PageHeader title="对账汇总" unit={unit} from={f.from} to={f.to} status={refreshing ? "更新中" : null} />
       <div role="tablist" aria-label="对账分区" className="flex gap-1 overflow-x-auto border-b">
         {TABS.map((t) => {
           const n = all.filter((x) => x.tab === t && x.status === "unmatched").length;

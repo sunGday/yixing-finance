@@ -102,6 +102,21 @@ describe("mock to live mapping", () => {
     assert.equal(view.networks.reduce((sum, row) => sum + (row.amount_fen ?? 0), 0), 1340359);
   });
 
+  it("sums the year by network instead of a single day", () => {
+    const year = buildOverview("2026-01-01", "2026-11-03", "estimate", TODAY, days, bills);
+    assert.equal(year.basis, "estimate");
+    assert.equal(year.source, "gromore_daily");
+    assert.deepEqual(year.networks.map((row) => row.ad_network), ["pangle", "ylh", "kuaishou", "gm_adx"]);
+    assert.ok(year.networks.every((row) => row.basis === "estimate"));
+    const net = year.networks.reduce((sum, row) => sum + (row.amount_fen ?? 0), 0);
+    assert.equal(year.total_fen, net + 100);
+    assert.ok((year.total_fen ?? 0) > 1340359);
+    assert.equal(year.by_month.find((month) => month.period === "2026-10")?.amount_fen, 300);
+    assert.equal(year.by_month[0]?.period, "2026-01");
+    assert.equal(year.by_month.at(-1)?.period, "2026-11");
+    assert.ok(year.networks.every((row) => !("app_id" in row) && !("placement_id" in row)));
+  });
+
   it("builds the same yesterday total from fixtures", () => {
     const view = buildOverview("2026-11-03", "2026-11-03", "auto", TODAY, days, bills);
     assert.equal(view.total_fen, 1340359);

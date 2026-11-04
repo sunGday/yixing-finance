@@ -14,22 +14,23 @@ const TH = "text-xs text-muted-foreground bg-sunken";
 const FOOT = "sticky bottom-0 bg-sunken font-medium";
 
 export function RevenueDetail({
-  rows, unit, loading, error, onRetry, gapFlags, filteredOut,
+  rows, unit, loading, refreshing, error, onRetry, gapFlags, filteredOut,
 }: {
   rows: Revenue[];
   unit: Unit;
   loading?: boolean;
+  refreshing?: boolean;
   error?: LiveError;
   onRetry?: () => void;
   gapFlags?: string[];
   filteredOut?: boolean;
 }) {
-  if (loading) return <div className="rounded-lg border bg-surface p-4 text-xs text-muted-foreground" aria-busy="true">明细加载中</div>;
-  if (error) return <ErrorState path={error.path} message={error.message} requestId={error.requestId} onRetry={onRetry} />;
+  if (loading && rows.length === 0) return <div className="rounded-lg border bg-surface p-4 text-xs text-muted-foreground" aria-busy="true">明细加载中</div>;
+  if (error && rows.length === 0) return <ErrorState path={error.path} message={error.message} requestId={error.requestId} onRetry={onRetry} />;
   const net = sum(rows, (row) => row.amount_fen);
   return (
     <section className="flex flex-col gap-2">
-      <h2 className="text-[13px] font-medium">产品 / 代码位明细</h2>
+      <h2 className="text-[13px] font-medium">产品 / 代码位明细{refreshing ? " · 更新中" : ""}</h2>
       {!!gapFlags?.length && (
         <ul className="rounded-md bg-warning-bg px-3 py-2 text-xs text-warning">
           {gapFlags.map((flag) => <li key={flag}>{explainGap(flag)} <span className="mono">{flag}</span></li>)}

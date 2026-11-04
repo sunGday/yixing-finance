@@ -19,12 +19,12 @@ function channelPath(id: string): string {
   return `/credentials/${encodeURIComponent(id)}`;
 }
 
-export function fetchCredentialSchema(): Promise<ChannelSchema[]> {
-  return apiSend<unknown>("/credentials/schema").then(normalizeSchema);
+export function fetchCredentialSchema(signal?: AbortSignal): Promise<ChannelSchema[]> {
+  return apiSend<unknown>("/credentials/schema", { signal }).then(normalizeSchema);
 }
 
-export function fetchCredentials(schema: ChannelSchema[]): Promise<{ channels: ChannelStatus[]; storage: SecretStorage | null }> {
-  return apiSend<unknown>("/credentials", { cache: "no-store" }).then((data) => ({
+export function fetchCredentials(schema: ChannelSchema[], signal?: AbortSignal): Promise<{ channels: ChannelStatus[]; storage: SecretStorage | null }> {
+  return apiSend<unknown>("/credentials", { cache: "no-store", signal }).then((data) => ({
     channels: normalizeCredentials(data, schema),
     storage: readStorage(data),
   }));

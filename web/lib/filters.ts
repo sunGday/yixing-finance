@@ -1,5 +1,8 @@
 import { AGENCY_OWNER_ID, type AdNetwork, type ReconStatus } from "./types";
 import type { Unit } from "./format";
+import { quickRange } from "./range";
+
+export { quickRange } from "./range";
 
 export type RevenueBasis = "auto" | "estimate" | "settlement";
 
@@ -16,14 +19,8 @@ export interface Filters {
 export type SP = Record<string, string | string[] | undefined>;
 // mock 基准日：fixtures 截止 2026-11-03；接 mario 后改为 new Date()（上海时区）
 export const TODAY = "2026-11-04";
-const addDays = (d: string, n: number) => { const t = new Date(d + "T00:00:00Z"); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); };
-export function quickRange(q: string): [string, string] {
-  const y = addDays(TODAY, -1);
-  if (q === "7d") return [addDays(TODAY, -7), y];
-  if (q === "week") { const w = new Date(TODAY + "T00:00:00Z").getUTCDay() || 7; return [addDays(TODAY, 1 - w), TODAY]; }
-  if (q === "month") return [TODAY.slice(0, 8) + "01", TODAY];
-  return [y, y];
-}
+/** 收入页默认：本年截止到昨天，口径预估（GroMore 分网络，不把整月结算单换成总额）。 */
+export const revenueDefaults: Partial<Filters> = { quick: "year", basis: "estimate" };
 const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? "";
 const NETWORKS = ["pangle", "ylh", "kuaishou", "gm_adx"] as const;
 function parseNetwork(v: string): Filters["network"] {
@@ -34,7 +31,7 @@ function parseBasis(v: string): Filters["basis"] {
 }
 export function parseFilters(sp: SP, defaults: Partial<Filters> = {}): Filters {
   const quick = one(sp.quick) || (one(sp.from) ? "custom" : defaults.quick ?? "yesterday");
-  const [qf, qt] = quickRange(quick);
+  const [qf, qt] = quickRange(quick, TODAY);
   return {
     quick, from: one(sp.from) || qf, to: one(sp.to) || qt,
     agency: AGENCY_OWNER_ID,

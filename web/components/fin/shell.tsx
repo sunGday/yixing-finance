@@ -1,10 +1,11 @@
 "use client";
 
-import Link from "next/link";
+import Link, { useLinkStatus } from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect } from "react";
 import { Coins, KeyRound, LayoutDashboard, Scale, Wallet } from "lucide-react";
 import { AGENCY_OWNER_ID } from "@/lib/types";
-import { keptHref, useQueryString } from "@/lib/url-state";
+import { keptHref, notifyLocation, useQueryString } from "@/lib/url-state";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "./theme";
 
@@ -22,12 +23,25 @@ function norm(p: string) {
   return p || "/";
 }
 
+function PendingDot({ light = false }: { light?: boolean }) {
+  const { pending } = useLinkStatus();
+  if (!pending) return null;
+  return <span role="status" aria-label="打开中" className={cn("absolute right-1.5 top-1.5 size-1.5 rounded-full", light ? "bg-white" : "bg-brand")} />;
+}
+
+function LocationSync() {
+  const path = usePathname();
+  useEffect(() => { notifyLocation(); }, [path]);
+  return null;
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const path = norm(usePathname() || "/");
   const search = useQueryString();
   const active = (href: string) => path === href;
   return (
     <div className="min-h-dvh md:flex">
+      <LocationSync />
       <a href="#content" className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:m-2 focus:rounded focus:bg-surface focus:px-3 focus:py-2">跳到内容</a>
       <aside className="yx-side hidden md:flex w-56 shrink-0 flex-col sticky top-0 h-dvh border-r border-white/10">
         <div className="flex items-center gap-2 px-3 py-4 border-b border-white/10">
@@ -41,9 +55,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <nav className="px-2 flex flex-col gap-0.5" aria-label="主导航">
           {NAV.map(({ href, label, icon: I }) => (
             <Link key={href} href={keptHref(href, search)} aria-current={active(href) ? "page" : undefined}
-              className={cn("flex items-center gap-2 rounded-md px-2.5 h-9 text-sm text-white/75 hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand",
+              className={cn("relative flex items-center gap-2 rounded-md px-2.5 h-9 text-sm text-white/75 hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand",
                 active(href) && "bg-brand/20 text-white font-medium shadow-[inset_2px_0_0_#60a5fa]")}>
-              <I className="size-4 shrink-0" />{label}
+              <I className="size-4 shrink-0" />{label}<PendingDot light />
             </Link>
           ))}
           <span className="flex items-center px-2.5 h-9 text-sm text-white/35">报表（二期）</span>
@@ -51,9 +65,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div className="px-3 pt-4 pb-1 text-[11px] tracking-wide text-white/40">本机</div>
         <nav className="px-2" aria-label="凭证">
           <Link href={CRED.href} aria-current={active(CRED.href) ? "page" : undefined}
-            className={cn("flex items-center gap-2 rounded-md px-2.5 h-9 text-sm text-white/75 hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand",
+            className={cn("relative flex items-center gap-2 rounded-md px-2.5 h-9 text-sm text-white/75 hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand",
               active(CRED.href) && "bg-brand/20 text-white font-medium shadow-[inset_2px_0_0_#60a5fa]")}>
-            <CRED.icon className="size-4 shrink-0" />{CRED.label}
+            <CRED.icon className="size-4 shrink-0" />{CRED.label}<PendingDot light />
           </Link>
         </nav>
         <div className="mt-auto p-3 border-t border-white/10 flex flex-col gap-2">
@@ -70,8 +84,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <nav className="md:hidden fixed bottom-0 inset-x-0 z-30 grid grid-cols-5 border-t bg-surface/95 backdrop-blur pb-[env(safe-area-inset-bottom)]" aria-label="主导航">
         {[...NAV, CRED].map(({ href, short, icon: I }) => (
           <Link key={href} href={keptHref(href, search)} aria-current={active(href) ? "page" : undefined}
-            className={cn("flex flex-col items-center justify-center h-14 text-[11px] gap-0.5", active(href) ? "text-brand font-medium" : "text-muted-foreground")}>
-            <I className="size-5" />{short}
+            className={cn("relative flex flex-col items-center justify-center h-14 text-[11px] gap-0.5", active(href) ? "text-brand font-medium" : "text-muted-foreground")}>
+            <I className="size-5" />{short}<PendingDot />
           </Link>
         ))}
       </nav>
