@@ -128,6 +128,11 @@ class PangleAdapter(RevenueAdapter):
                 return v
         return None
 
+    @staticmethod
+    def sign(params: dict, secure_key: str) -> str:
+        """GroMore 日报复用 rt/income 的同一套签名（空值不参与）。"""
+        return sign(params, secure_key)
+
     def _query(self, creds: dict, *, date: str | None, start: str | None, end: str | None, now) -> dict:
         moment = _as_shanghai(now)
         params = {
