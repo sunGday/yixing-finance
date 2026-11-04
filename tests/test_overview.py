@@ -4,16 +4,18 @@ import json
 import os
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from fastapi.testclient import TestClient
-from adapters.gromore import GroMoreClient, GroMoreFetchError, iter_shards, map_network
+from adapters.gromore import GroMoreClient, GroMoreFetchError, GroMoreTimeout, iter_shards, map_network
 from adapters.pangle import PangleAdapter
 import store as st
 from main import create_app
-from overview import card_ranges
+from overview import card_ranges, load_cards, load_overview
 
 FAKE = {"PANGLE_USER_ID": "u123456", "PANGLE_ROLE_ID": "r98765", "PANGLE_SECURE_KEY": "s3cr3t-FAKE-pangle-zz"}
 # 2026-11-03 四网合计 13403.59 元 = 1340359 分（Allen 实测日）。
@@ -161,6 +163,29 @@ class OverviewT(unittest.TestCase):
         self.client.clear_cache()
         self._ov(**{"from": "2026-11-03", "to": "2026-11-03"})
         self.assertGreater(len(self.calls), after)
+
+    def test_year_range_second_call_hits_cache(self):
+        params = {"from": "2026-01-01", "to": "2026-11-03"}
+        first = self._ov(**params)
+        self.assertEqual(first["source"], "gromore_daily")
+        self.assertEqual(first["total_fen"], 100 + 200 + 100 + 1340359)
+        mid = len(self.calls)
+        self.assertGreaterEqual(mid, 11)
+        started = time.perf_counter()
+        second = self._ov(**params)
+        self.assertLess(time.perf_counter() - started, 1.0)
+        self.assertEqual(len(self.calls), mid)
+        self.assertEqual(second["total_fen"], first["total_fen"])
+        day = self._ov(**{"from": "2026-11-03", "to": "2026-11-03"})
+        self.assertEqual(day["total_fen"], 1340359)
+        self.assertEqual(day["source"], "gromore_daily")
+        self.assertTrue(day["verified"])
+        self.assertEqual(len(self.calls), mid)
+        with open(os.path.join(os.environ["FIN_DATA_DIR"], "gromore-daily.json"), encoding="utf-8") as fh:
+            blob = fh.read()
+        self.assertNotIn(FAKE["PANGLE_SECURE_KEY"], blob)
+        self.assertIn(FAKE["PANGLE_USER_ID"], blob)
+        self.assertNotIn("PANGLE_SECURE_KEY", blob)
 
     def test_gromore_error_is_not_cached(self):
         calls = {"n": 0}
@@ -416,6 +441,165 @@ class FallbackT(unittest.TestCase):
         self.assertIn("today_excluded:2026-11-01", cards["this_month"]["gap_flags"])
         self.assertEqual(cards["yesterday"]["from"], "2026-10-31")
         self.assertEqual((cards["last_month"]["from"], cards["last_month"]["to"]), ("2026-10-01", "2026-10-31"))
+
+
+class CacheBoundT(unittest.TestCase):
+    """本年区间：第二次命中日缓存；卡住的上游不能把请求或卡片挂住。"""
+
+    def tearDown(self):
+        os.environ.pop("FIN_DATA_DIR", None)
+
+    def test_closed_days_outlive_the_90s_ttl(self):
+        now = [1_700_000_000.0]
+        calls = []
+
+        def getter(url, params):
+            calls.append((params["start_date"], params["end_date"]))
+            return _page(params)
+
+        client = GroMoreClient(env=FAKE, getter=getter, clock=lambda: now[0], today=lambda: dt.date(2026, 11, 4),
+                               cache_ttl=90, closed_ttl=24 * 3600)
+        client.fetch("2026-01-01", "2026-11-03")
+        cut = len(calls)
+        now[0] += 120
+        client.fetch("2026-01-01", "2026-11-03")
+        fresh = calls[cut:]
+        self.assertTrue(fresh)
+        self.assertTrue(all(start >= "2026-11-03" and end >= "2026-11-03" for start, end in fresh))
+        self.assertLess(len(fresh), cut)
+
+    def test_blocked_year_fetch_returns_before_the_upstream(self):
+        release = threading.Event()
+        started = threading.Event()
+
+        def getter(url, params):
+            started.set()
+            if not release.wait(5):
+                raise GroMoreFetchError("http error")
+            return _page(params)
+
+        client = GroMoreClient(env=FAKE, getter=getter, today=dt.date(2026, 11, 4))
+        started_at = time.perf_counter()
+        try:
+            with self.assertRaises(GroMoreTimeout):
+                client.fetch("2026-01-01", "2026-11-03", max_wait=0.3)
+            self.assertLess(time.perf_counter() - started_at, 2.0)
+            self.assertTrue(started.is_set())
+        finally:
+            release.set()
+
+    def test_year_timeout_is_a_gap_not_a_pangle_rescan(self):
+        release = threading.Event()
+
+        def getter(url, params):
+            if not release.wait(5):
+                raise GroMoreFetchError("http error")
+            return _page(params)
+
+        client = GroMoreClient(env=FAKE, getter=getter, today=dt.date(2026, 11, 4))
+        started_at = time.perf_counter()
+        try:
+            with patch("store.load_revenues", side_effect=AssertionError("pangle year")):
+                body = load_overview(
+                    "2026-01-01", "2026-11-03", "auto", today=dt.date(2026, 11, 4),
+                    settlement_items=[], gromore=client, live_items=None, max_wait=0.3)
+            self.assertLess(time.perf_counter() - started_at, 2.0)
+        finally:
+            release.set()
+        self.assertIn("gromore_fetch_failed", body["gap_flags"])
+        self.assertFalse(any(flag.startswith("fallback_rt_income") for flag in body["gap_flags"]))
+        self.assertIsNone(body["total_fen"])
+        self.assertNotEqual(body["total_fen"], 0)
+
+    def test_cards_do_not_wait_on_a_blocked_year_shard(self):
+        release = threading.Event()
+        blocked = threading.Event()
+
+        def getter(url, params):
+            if params["start_date"] == "2026-01-01":
+                blocked.set()
+                if not release.wait(8):
+                    raise GroMoreFetchError("http error")
+            return _page(params)
+
+        client = GroMoreClient(env=FAKE, getter=getter, today=dt.date(2026, 11, 4))
+        box = {}
+
+        def year():
+            try:
+                client.fetch("2026-01-01", "2026-11-03", max_wait=6)
+            except GroMoreFetchError as exc:
+                box["err"] = exc
+
+        thread = threading.Thread(target=year)
+        thread.start()
+        try:
+            self.assertTrue(blocked.wait(2))
+            started_at = time.perf_counter()
+            body = load_cards(dt.date(2026, 11, 4), "auto", settlement_items=[], gromore=client, live_items=[])
+            self.assertLess(time.perf_counter() - started_at, 2.0)
+            self.assertTrue(thread.is_alive())
+        finally:
+            release.set()
+            thread.join(3)
+        self.assertFalse(thread.is_alive())
+        cards = {c["key"]: c for c in body["cards"]}
+        self.assertEqual(cards["yesterday"]["total_fen"], 1340359)
+        self.assertEqual(cards["yesterday"]["from"], "2026-11-03")
+
+    def test_stale_cards_return_without_waiting_for_refresh(self):
+        now = [1_700_000_000.0]
+        release = threading.Event()
+
+        def getter(url, params):
+            if now[0] > 1_700_000_000.0:
+                if not release.wait(2):
+                    raise GroMoreFetchError("http error")
+            return _page(params)
+
+        client = GroMoreClient(env=FAKE, getter=getter, clock=lambda: now[0], today=lambda: dt.date(2026, 11, 4),
+                               cache_ttl=90, closed_ttl=24 * 3600)
+        warm = load_cards(dt.date(2026, 11, 4), "auto", settlement_items=[], gromore=client, live_items=[])
+        self.assertEqual({c["key"]: c["total_fen"] for c in warm["cards"]}["yesterday"], 1340359)
+        now[0] += 24 * 3600 + 5
+        started_at = time.perf_counter()
+        try:
+            body = load_cards(dt.date(2026, 11, 4), "auto", settlement_items=[], gromore=client, live_items=[])
+            self.assertLess(time.perf_counter() - started_at, 0.6)
+        finally:
+            release.set()
+        cards = {c["key"]: c for c in body["cards"]}
+        self.assertEqual(cards["yesterday"]["total_fen"], 1340359)
+        self.assertEqual(cards["last_month"]["total_fen"], 300)
+
+    def test_new_client_reads_disk_cache(self):
+        calls = []
+
+        def getter(url, params):
+            calls.append(params["start_date"])
+            return _page(params)
+
+        tmp = tempfile.TemporaryDirectory()
+        os.environ["FIN_DATA_DIR"] = tmp.name
+        try:
+            first = GroMoreClient(env=FAKE, getter=getter, today=dt.date(2026, 11, 4))
+            rows, _gaps = first.fetch("2026-01-01", "2026-11-03")
+            self.assertEqual(sum(r["amount_fen"] for r in rows if r["stat_date"] == "2026-11-03"), 1340359)
+            cut = len(calls)
+            self.assertGreater(cut, 0)
+            with open(os.path.join(tmp.name, "gromore-daily.json"), encoding="utf-8") as fh:
+                blob = fh.read()
+            self.assertNotIn(FAKE["PANGLE_SECURE_KEY"], blob)
+            second = GroMoreClient(env=FAKE, getter=getter, today=dt.date(2026, 11, 4))
+            again, _gaps = second.fetch("2026-01-01", "2026-11-03")
+            self.assertEqual(len(calls), cut)
+            self.assertEqual(sum(r["amount_fen"] for r in again if r["stat_date"] == "2026-11-03"), 1340359)
+            second.clear_cache()
+            self.assertFalse(os.path.exists(os.path.join(tmp.name, "gromore-daily.json")))
+            GroMoreClient(env=FAKE, getter=getter, today=dt.date(2026, 11, 4)).fetch("2026-11-03", "2026-11-03")
+            self.assertGreater(len(calls), cut)
+        finally:
+            tmp.cleanup()
 
 
 if __name__ == "__main__":

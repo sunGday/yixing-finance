@@ -14,12 +14,19 @@ Allen 2026-11-03 实测 `csj-cli report gromore-daily`
 签名复用穿山甲适配器（排序 k=v 后拼接 security key 再 MD5）。
 凭证即 PANGLE_*，不单独注册渠道（避免 credentials schema 多出一个 channel）。
 单次请求跨度 ≤30 天（含首尾），更长区间分片。不在 import 时发 HTTP。
+
+日缓存按 (user_id, role_id, 上海自然日) 记已映射的行，不写 secure key。
+早于昨日的日子默认留 24 小时，昨日及更新的日子 90 秒；失败不写入。
+设了 FIN_DATA_DIR 时落到 gromore-daily.json，重启后仍可命中。分片并行拉取，
+单次等待有上限，避免本年区间把请求挂到 BFF 断开。
 """
 from __future__ import annotations
 import datetime as dt
+import json
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, wait
 
 from adapters.base import CredentialMissingError, yuan_to_fen
 from adapters.pangle import PangleAdapter
@@ -36,6 +43,20 @@ _LIST_KEYS = ("report_list", "reportlist", "reportList", "list", "rows", "data_l
 
 class GroMoreFetchError(RuntimeError):
     """上游失败。message 不得含凭证或响应正文。"""
+
+
+class GroMoreTimeout(GroMoreFetchError):
+    """等待上限到了，这一段还没有完整的日缓存。"""
+
+
+# 昨日（上海）仍可能改数，短 TTL。更早的自然日作为闭日，避免每次点本年都重拉全年。
+RECENT_TTL = 90.0
+CLOSED_TTL = 24 * 60 * 60
+DEFAULT_MAX_WAIT = 20.0
+MAX_FETCH_WORKERS = 6
+CACHE_FILE = "gromore-daily.json"
+_SH = dt.timezone(dt.timedelta(hours=8))
+_ROW_KEYS = ("stat_date", "ad_network", "code", "amount_fen", "api_amount_fen", "gap")
 
 
 def iter_shards(start: str, end: str, span: int = MAX_SPAN_DAYS):
@@ -176,24 +197,64 @@ def _default_get(url: str, params: dict) -> dict:
     return body
 
 
+def _ns_key(ns: tuple) -> str:
+    return str(ns[0]) + "\x1f" + str(ns[1])
+
+
+def _safe_row(row: dict) -> dict | None:
+    if not isinstance(row, dict) or not row.get("stat_date"):
+        return None
+    try:
+        amount = int(row["amount_fen"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    api = row.get("api_amount_fen")
+    if api is not None:
+        try:
+            api = int(api)
+        except (TypeError, ValueError):
+            return None
+    out = {k: row.get(k) for k in _ROW_KEYS}
+    out["stat_date"] = str(row["stat_date"])[:10]
+    out["amount_fen"] = amount
+    out["api_amount_fen"] = api
+    return out
+
+
 class GroMoreClient:
     def __init__(self, env: dict | None = None, getter=None, limit: int = 100, base: str | None = None,
-                 cache_ttl: float = 90.0):
+                 cache_ttl: float = RECENT_TTL, closed_ttl: float = CLOSED_TTL, clock=None, today=None):
         self._env = env
         self._getter = getter or _default_get
         self.limit = limit
         self._base = base
-        # 按自然日记住已映射的行。重叠区间（本年、昨日、卡片）不再重复打穿山甲。
-        # 键只有 user_id / role_id，不放 secure key。失败不写入。
+        # 键只有 user_id / role_id + 自然日，不放 secure key。失败不写入。
+        # cache_ttl<=0 关闭缓存（与旧行为一致）。闭日用 closed_ttl，昨日用 cache_ttl。
         self._cache_ttl = cache_ttl
+        self._closed_ttl = closed_ttl
+        self._clock = clock or time.time
+        self._today = today
         self._lock = threading.Lock()
+        self._persist_lock = threading.Lock()
         self._gen = 0
+        self._persist_gen = 0
+        self._loaded = False
+        self._loading = None
+        self._refreshing = False
         self._days: dict[tuple, dict[str, tuple[float, list]]] = {}
+        self._inflight: dict[tuple, dict] = {}
 
     def clear_cache(self) -> None:
-        with self._lock:
-            self._gen += 1
-            self._days.clear()
+        with self._persist_lock:
+            with self._lock:
+                self._gen += 1
+                self._days.clear()
+                self._loaded = True
+                slots = list(self._inflight.values())
+                self._inflight.clear()
+            for slot in slots:
+                slot["event"].set()
+            self._delete_cache_file()
 
     def _environ(self) -> dict:
         return self._env if self._env is not None else os.environ
@@ -220,8 +281,13 @@ class GroMoreClient:
         params["sign"] = PangleAdapter.sign(params, creds["PANGLE_SECURE_KEY"])
         return params
 
-    def fetch(self, start: str, end: str) -> tuple[list[dict], list[str]]:
-        """返回 (rows, gap_flags)。rows 为已映射的 date×network 分。无凭证抛 CredentialMissingError。"""
+    def fetch(self, start: str, end: str, *, max_wait: float | None = DEFAULT_MAX_WAIT,
+              stale_ok: bool = False) -> tuple[list[dict], list[str]]:
+        """返回 (rows, gap_flags)。rows 为已映射的 date×network 分。无凭证抛 CredentialMissingError。
+
+        max_wait：本次同步等待上限（秒）。到点仍缺日则抛 GroMoreTimeout，已完成的分片留在缓存里。
+        stale_ok：区间里每一天都有过缓存（含过期）时立刻返回，缺的新鲜日放到后台刷新。
+        """
         creds = PangleAdapter(env=self._environ()).credentials()
         if start > end:
             return [], []
@@ -229,14 +295,22 @@ class GroMoreClient:
         if self._cache_ttl <= 0:
             return self._fetch_uncached(url, creds, start, end)
         ns = (str(creds["PANGLE_USER_ID"]), str(creds["PANGLE_ROLE_ID"]))
+        self._ensure_loaded()
         with self._lock:
             gen = self._gen
-        now = time.monotonic()
-        for shard_start, shard_end in self._missing_shards(ns, start, end, now):
-            gaps: list[str] = []
-            rows = self._fetch_shard(url, creds, shard_start, shard_end, gaps)
-            self._store_span(ns, shard_start, shard_end, rows, now, gen)
-        return self._read_span(ns, start, end, now)
+        if stale_ok and self._covered(ns, start, end, allow_stale=True):
+            missing = self._missing_shards(ns, start, end)
+            if missing:
+                self._refresh_async(url, creds, ns, missing, gen)
+            return self._read_span(ns, start, end, allow_stale=True)
+        shards = self._missing_shards(ns, start, end)
+        if shards:
+            self._run_shards(url, creds, ns, start, end, shards, gen, max_wait)
+        if self._covered(ns, start, end, allow_stale=False):
+            return self._read_span(ns, start, end, allow_stale=False)
+        if stale_ok and self._covered(ns, start, end, allow_stale=True):
+            return self._read_span(ns, start, end, allow_stale=True)
+        raise GroMoreTimeout("deadline")
 
     def _fetch_uncached(self, url, creds, start: str, end: str) -> tuple[list[dict], list[str]]:
         out: list[dict] = []
@@ -246,8 +320,28 @@ class GroMoreClient:
         kept = [r for r in out if start <= r["stat_date"] <= end]
         return kept, sorted(set(gaps))
 
-    def _missing_shards(self, ns: tuple, start: str, end: str, now: float):
-        missing: list[str] = []
+    def _today_date(self) -> dt.date:
+        src = self._today() if callable(self._today) else self._today
+        if isinstance(src, str):
+            return dt.date.fromisoformat(src)
+        if isinstance(src, dt.datetime):
+            return src.date()
+        if isinstance(src, dt.date):
+            return src
+        return dt.datetime.now(_SH).date()
+
+    def _ttl_for(self, iso: str, today: dt.date) -> float:
+        yesterday = (today - dt.timedelta(days=1)).isoformat()
+        if iso < yesterday:
+            return self._closed_ttl
+        return self._cache_ttl
+
+    def _fresh(self, hit, iso: str, now: float, today: dt.date) -> bool:
+        return bool(hit) and now - hit[0] < self._ttl_for(iso, today)
+
+    def _covered(self, ns: tuple, start: str, end: str, *, allow_stale: bool) -> bool:
+        now = self._clock()
+        today = self._today_date()
         with self._lock:
             bucket = self._days.get(ns, {})
             day = dt.date.fromisoformat(start)
@@ -255,7 +349,23 @@ class GroMoreClient:
             while day <= last:
                 iso = day.isoformat()
                 hit = bucket.get(iso)
-                if not hit or now - hit[0] >= self._cache_ttl:
+                if hit is None or (not allow_stale and not self._fresh(hit, iso, now, today)):
+                    return False
+                day += dt.timedelta(days=1)
+        return True
+
+    def _missing_shards(self, ns: tuple, start: str, end: str):
+        missing: list[str] = []
+        now = self._clock()
+        today = self._today_date()
+        with self._lock:
+            bucket = self._days.get(ns, {})
+            day = dt.date.fromisoformat(start)
+            last = dt.date.fromisoformat(end)
+            while day <= last:
+                iso = day.isoformat()
+                hit = bucket.get(iso)
+                if not self._fresh(hit, iso, now, today):
                     missing.append(iso)
                 day += dt.timedelta(days=1)
         if not missing:
@@ -275,10 +385,14 @@ class GroMoreClient:
             shards.extend(iter_shards(span_start, span_end))
         return shards
 
-    def _store_span(self, ns: tuple, start: str, end: str, rows: list[dict], now: float, gen: int) -> None:
+    def _store_span(self, ns: tuple, start: str, end: str, rows: list[dict], gen: int) -> None:
         by: dict[str, list] = {}
         for row in rows:
-            by.setdefault(row["stat_date"], []).append(dict(row))
+            safe = _safe_row(row)
+            if safe is None:
+                continue
+            by.setdefault(safe["stat_date"], []).append(safe)
+        stamp = self._clock()
         with self._lock:
             if gen != self._gen:
                 return
@@ -287,25 +401,231 @@ class GroMoreClient:
             last = dt.date.fromisoformat(end)
             while day <= last:
                 iso = day.isoformat()
-                bucket[iso] = (now, by.get(iso, []))
+                bucket[iso] = (stamp, [dict(item) for item in by.get(iso, [])])
                 day += dt.timedelta(days=1)
             if len(bucket) > 420:
                 for old in sorted(bucket)[: len(bucket) - 400]:
                     bucket.pop(old, None)
+            self._persist_gen += 1
+            token = self._persist_gen
+            stored_gen = self._gen
+        self._write_snapshot(stored_gen, token)
 
-    def _read_span(self, ns: tuple, start: str, end: str, now: float) -> tuple[list[dict], list[str]]:
+    def _read_span(self, ns: tuple, start: str, end: str, *, allow_stale: bool) -> tuple[list[dict], list[str]]:
         rows: list[dict] = []
+        now = self._clock()
+        today = self._today_date()
         with self._lock:
             bucket = self._days.get(ns, {})
             day = dt.date.fromisoformat(start)
             last = dt.date.fromisoformat(end)
             while day <= last:
-                hit = bucket.get(day.isoformat())
-                if hit and now - hit[0] < self._cache_ttl:
+                iso = day.isoformat()
+                hit = bucket.get(iso)
+                if hit and (allow_stale or self._fresh(hit, iso, now, today)):
                     rows.extend(dict(item) for item in hit[1])
                 day += dt.timedelta(days=1)
         gaps = sorted({row["gap"] for row in rows if row.get("gap")})
         return rows, gaps
+
+    def _run_shards(self, url, creds, ns, start, end, shards, gen, max_wait) -> None:
+        if max_wait is not None and max_wait < 0:
+            max_wait = 0
+        deadline = None if max_wait is None else time.monotonic() + max_wait
+        workers = min(MAX_FETCH_WORKERS, len(shards))
+        ex = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="gromore")
+        futs = [ex.submit(self._fetch_store_shard, url, creds, ns, a, b, gen, deadline) for a, b in shards]
+        try:
+            done, pending = wait(futs, timeout=max_wait)
+        finally:
+            ex.shutdown(wait=False, cancel_futures=False)
+        errors = []
+        for fut in done:
+            err = fut.exception()
+            if err is not None:
+                errors.append(err)
+        hard = [e for e in errors if not isinstance(e, GroMoreTimeout)]
+        if hard:
+            raise hard[0]
+        if pending and not self._covered(ns, start, end, allow_stale=False):
+            raise GroMoreTimeout("deadline")
+        if errors and not self._covered(ns, start, end, allow_stale=False):
+            raise GroMoreTimeout("deadline")
+
+    def _fetch_store_shard(self, url, creds, ns, start, end, gen, deadline) -> None:
+        key = (ns, start, end)
+        with self._lock:
+            slot = self._inflight.get(key)
+            if slot is None:
+                slot = {"event": threading.Event(), "err": None}
+                self._inflight[key] = slot
+                owner = True
+            else:
+                owner = False
+        if not owner:
+            timeout = None if deadline is None else max(0.0, deadline - time.monotonic())
+            if not slot["event"].wait(timeout):
+                raise GroMoreTimeout("deadline")
+            if slot["err"] is not None:
+                raise slot["err"]
+            return
+        try:
+            gaps: list[str] = []
+            rows = self._fetch_shard(url, creds, start, end, gaps)
+            self._store_span(ns, start, end, rows, gen)
+        except Exception as e:
+            slot["err"] = e
+            raise
+        finally:
+            slot["event"].set()
+            with self._lock:
+                if self._inflight.get(key) is slot:
+                    self._inflight.pop(key, None)
+
+    def _refresh_async(self, url, creds, ns, shards, gen) -> None:
+        with self._lock:
+            if self._refreshing:
+                return
+            self._refreshing = True
+
+        def run():
+            try:
+                self._run_shards(url, creds, ns, shards[0][0], shards[-1][1], shards, gen, None)
+            except GroMoreFetchError:
+                return
+            finally:
+                with self._lock:
+                    self._refreshing = False
+
+        threading.Thread(target=run, name="gromore-refresh", daemon=True).start()
+
+    def _cache_file(self) -> str | None:
+        folder = os.environ.get("FIN_DATA_DIR")
+        if not folder:
+            return None
+        return os.path.join(folder, CACHE_FILE)
+
+    def _delete_cache_file(self) -> None:
+        path = self._cache_file()
+        if not path:
+            return
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            return
+        except OSError:
+            return
+
+    def _export_locked(self) -> dict:
+        accounts = {}
+        for ns, bucket in self._days.items():
+            days = {}
+            for iso, (stamp, rows) in bucket.items():
+                days[iso] = {"t": stamp, "rows": [dict(r) for r in rows]}
+            accounts[_ns_key(ns)] = days
+        return {"version": 1, "accounts": accounts}
+
+    def _write_snapshot(self, gen: int, token: int) -> None:
+        path = self._cache_file()
+        if not path:
+            return
+        secret = str(self._environ().get("PANGLE_SECURE_KEY") or "")
+        try:
+            with self._persist_lock:
+                with self._lock:
+                    if gen != self._gen or token != self._persist_gen:
+                        return
+                    snapshot = self._export_locked()
+                try:
+                    body = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
+                except (TypeError, ValueError):
+                    return
+                if secret and secret in body:
+                    return
+                os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+                tmp = path + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    fh.write(body)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                with self._lock:
+                    if gen != self._gen or token != self._persist_gen:
+                        try:
+                            os.remove(tmp)
+                        except OSError:
+                            pass
+                        return
+                    os.replace(tmp, path)
+        except OSError:
+            return
+
+    def _ensure_loaded(self) -> None:
+        with self._lock:
+            if self._loaded:
+                return
+            if self._loading is None:
+                self._loading = threading.Event()
+                leader = True
+            else:
+                leader = False
+            loading = self._loading
+        if not leader:
+            loading.wait()
+            return
+        try:
+            self._load_file()
+        finally:
+            with self._lock:
+                self._loaded = True
+                self._loading = None
+            loading.set()
+
+    def _load_file(self) -> None:
+        path = self._cache_file()
+        if not path or not os.path.exists(path):
+            return
+        try:
+            with open(path, encoding="utf-8") as fh:
+                payload = json.load(fh)
+        except (OSError, ValueError):
+            return
+        if not isinstance(payload, dict) or payload.get("version") != 1:
+            return
+        accounts = payload.get("accounts")
+        if not isinstance(accounts, dict):
+            return
+        secret = str(self._environ().get("PANGLE_SECURE_KEY") or "")
+        if secret and secret in json.dumps(accounts):
+            return
+        parsed: dict[tuple, dict] = {}
+        for key, days in accounts.items():
+            if not isinstance(key, str) or "\x1f" not in key or not isinstance(days, dict):
+                continue
+            user, role = key.split("\x1f", 1)
+            bucket: dict[str, tuple] = {}
+            for iso, item in days.items():
+                if not isinstance(iso, str) or len(iso) != 10 or not isinstance(item, dict):
+                    continue
+                try:
+                    stamp = float(item.get("t"))
+                except (TypeError, ValueError):
+                    continue
+                raw_rows = item.get("rows") if isinstance(item.get("rows"), list) else []
+                safe_rows = []
+                for raw in raw_rows:
+                    safe = _safe_row(raw)
+                    if safe is not None and safe["stat_date"] == iso:
+                        safe_rows.append(safe)
+                bucket[iso] = (stamp, safe_rows)
+            if bucket:
+                parsed[(user, role)] = bucket
+        with self._lock:
+            for ns, bucket in parsed.items():
+                cur = self._days.setdefault(ns, {})
+                for iso, item in bucket.items():
+                    prev = cur.get(iso)
+                    if prev is None or item[0] >= prev[0]:
+                        cur[iso] = item
 
     def _fetch_shard(self, url, creds, start, end, gaps) -> list[dict]:
         offset = 0

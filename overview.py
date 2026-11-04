@@ -11,10 +11,16 @@ basis=estimate / settlement 强制切换。settlement 缺单打 settlement_missi
 """
 from __future__ import annotations
 import datetime as dt
+import inspect
 from decimal import Decimal, ROUND_HALF_UP
 
 from adapters.base import CredentialMissingError
-from adapters.gromore import GroMoreFetchError, OVERVIEW_NETWORKS
+from adapters.gromore import DEFAULT_MAX_WAIT, GroMoreFetchError, GroMoreTimeout, OVERVIEW_NETWORKS
+
+# 本年大约 11 个 30 日分片。并行后冷启动应落在这个等待里；到点返回失败标志，不接着打穿山甲全年。
+OVERVIEW_FETCH_WAIT = DEFAULT_MAX_WAIT
+# 卡片只盖昨日到上月，不能被未缓存的本年请求拖住。有日缓存（含过期）则马上返回。
+CARDS_FETCH_WAIT = 8.0
 
 ORDER = {n: i for i, n in enumerate(OVERVIEW_NETWORKS)}
 _HARD = ("credential_missing", "gromore_fetch_failed", "network_unmapped", "settlement_missing",
@@ -110,17 +116,43 @@ def _fallback_rows(live_items, start: str, end: str) -> tuple[list[dict], list[s
     return rows, gaps
 
 
-def fetch_estimate(gromore, start: str, end: str, live_items) -> tuple[list[dict], str | None, list[str]]:
-    """拉预估。失败或无凭证时改加总已有 live rt/income 穿山甲行（不含 mock）。"""
+def _span_days(start: str, end: str) -> int:
+    return (dt.date.fromisoformat(end) - dt.date.fromisoformat(start)).days
+
+
+def _fetch_gromore(gromore, start: str, end: str, *, max_wait: float | None, stale_ok: bool):
+    kwargs = {}
+    try:
+        params = inspect.signature(gromore.fetch).parameters
+    except (TypeError, ValueError):
+        params = None
+    if params is None or "max_wait" in params:
+        if max_wait is not None:
+            kwargs["max_wait"] = max_wait
+    if (params is None or "stale_ok" in params) and stale_ok:
+        kwargs["stale_ok"] = True
+    return gromore.fetch(start, end, **kwargs)
+
+
+def fetch_estimate(gromore, start: str, end: str, live_items, *, max_wait: float | None = None,
+                   stale_ok: bool = False) -> tuple[list[dict], str | None, list[str]]:
+    """拉预估。失败或无凭证时改加总已有 live rt/income 穿山甲行（不含 mock）。
+
+    等待超时，或区间长于 70 天的上游失败，不再补拉穿山甲：那一次补拉本身就会把本年请求挂住。
+    """
     if start > end:
         return [], None, []
     try:
-        rows, _gaps = gromore.fetch(start, end)
+        rows, _gaps = _fetch_gromore(gromore, start, end, max_wait=max_wait, stale_ok=stale_ok)
         return rows, "gromore_daily", []
+    except GroMoreTimeout:
+        return [], None, ["gromore_fetch_failed"]
     except CredentialMissingError:
         rows, extra = _fallback_rows(live_items, start, end)
         return rows, "rt_income_fallback", ["credential_missing:gromore", "fallback_rt_income:pangle_only", *extra]
     except GroMoreFetchError:
+        if _span_days(start, end) > 70:
+            return [], None, ["gromore_fetch_failed"]
         rows, extra = _fallback_rows(live_items, start, end)
         return rows, "rt_income_fallback", ["gromore_fetch_failed", "fallback_rt_income:pangle_only", *extra]
 
@@ -247,11 +279,12 @@ def build_overview(date_from: str, date_to: str, basis: str, today: dt.date, set
     }
 
 
-def load_overview(date_from: str, date_to: str, basis: str, *, today: dt.date, settlement_items, gromore, live_items):
+def load_overview(date_from: str, date_to: str, basis: str, *, today: dt.date, settlement_items, gromore, live_items,
+                  max_wait: float = OVERVIEW_FETCH_WAIT):
     yest = (today - dt.timedelta(days=1)).isoformat()
     fetch_to = min(date_to, yest)
     if date_from <= fetch_to:
-        rows, source, gaps = fetch_estimate(gromore, date_from, fetch_to, live_items)
+        rows, source, gaps = fetch_estimate(gromore, date_from, fetch_to, live_items, max_wait=max_wait)
     else:
         rows, source, gaps = [], None, []
     return build_overview(date_from, date_to, basis, today, settlement_items, rows, source, gaps)
@@ -263,7 +296,8 @@ def _empty_card(spec, basis, today: dt.date) -> dict:
             "gap_flags": [f"today_excluded:{today.isoformat()}"], "verified": False}
 
 
-def load_cards(today: dt.date, basis: str, *, settlement_items, gromore, live_items) -> dict:
+def load_cards(today: dt.date, basis: str, *, settlement_items, gromore, live_items,
+               max_wait: float = CARDS_FETCH_WAIT) -> dict:
     specs = card_ranges(today)
     yest = (today - dt.timedelta(days=1)).isoformat()
     spans = [(s["from"].isoformat(), s["to"].isoformat()) for s in specs if s["from"] is not None]
@@ -272,7 +306,9 @@ def load_cards(today: dt.date, basis: str, *, settlement_items, gromore, live_it
         union_from = min(a for a, _ in spans)
         union_to = min(yest, max(b for _, b in spans))
         if union_from <= union_to:
-            rows, source, gaps = fetch_estimate(gromore, union_from, union_to, live_items)
+            # stale_ok：已有日缓存就先返回，不等一次未命中的长拉取。缺日时最多等 max_wait。
+            rows, source, gaps = fetch_estimate(
+                gromore, union_from, union_to, live_items, max_wait=max_wait, stale_ok=True)
     cards = []
     for spec in specs:
         if spec["from"] is None:

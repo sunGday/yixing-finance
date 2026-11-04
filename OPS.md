@@ -55,6 +55,6 @@ curl -sS "$B/revenues?date=YYYY-MM-DD"
 csj-cli report income --date YYYY-MM-DD --region cn
 ```
   单测不打外网：`python3 -m unittest tests.test_pangle_income tests.test_api tests.test_overview -v`（HTTP 已 mock）。
-- **v0.6 总览**用同一套 `PANGLE_*` 请求 GroMore 日报（`/union_media/open/api/mediation/get_daily_income_report_data`，主机可用 `CSJ_API_BASE` 覆盖）。无凭证或请求失败时，总览只加总该区间的 live `rt/income` 穿山甲行，不用 mock。
+- **v0.6 总览**用同一套 `PANGLE_*` 请求 GroMore 日报（`/union_media/open/api/mediation/get_daily_income_report_data`，主机可用 `CSJ_API_BASE` 覆盖）。无凭证或请求失败时，总览只加总该区间的 live `rt/income` 穿山甲行，不用 mock。日缓存键是 user_id + role_id + 上海自然日（无 secure key）：昨日 90 秒，更早 24 小时；文件 `$FIN_DATA_DIR/gromore-daily.json`。温的本年总览只读缓存。卡片有缓存（含过期）时立即返回。冷拉取最多等 20 秒（卡片 8 秒），到点是 `gromore_fetch_failed`，不补拉全年穿山甲。改凭证会清缓存。
 - **结算单**写在 `$FIN_DATA_DIR/settlements.json`（ECS 上即 `/data/finance/settlements.json`），与 secrets 分开，勿把密钥写进 `evidence_ref`。完成签订记 `settled`（正式入账金额）；`paid` 只表示已收款。`estimated` 不能写入该文件。
 - ECS：`sudo install -d -m 700 -o <api运行用户> /var/lib/yixing-finance/secrets`；docker 挂 `/var/lib/yixing-finance/secrets:/data/secrets` + `FIN_SECRETS_DIR=/data/secrets`；systemd(www-data) 则 `chown www-data` 该目录。备份时按密钥对待。
