@@ -37,6 +37,11 @@ export function rangeParams(f: Filters): Record<string, string | undefined> {
   return { start_date: f.from, end_date: f.to, to_owner_id: f.subs.length === 1 ? f.subs[0] : undefined };
 }
 
+/** 行级 /revenues 只接受 pangle|ylh。总览网络在客户端筛，不能把快手传上去。 */
+export function rowNetworkParam(network: Filters["network"]): string | undefined {
+  return network === "pangle" || network === "ylh" ? network : undefined;
+}
+
 export function shiftDay(d: string, n: number) {
   const t = new Date(d + "T00:00:00Z");
   if (Number.isNaN(t.getTime())) return d;

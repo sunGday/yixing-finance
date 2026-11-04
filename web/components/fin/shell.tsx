@@ -11,7 +11,7 @@ import { ThemeToggle } from "./theme";
 const NAV = [
   { href: "/", label: "概览", short: "概览", icon: LayoutDashboard },
   { href: "/recharges", label: "充值流水", short: "充值", icon: Wallet },
-  { href: "/revenues", label: "收入流水", short: "收入", icon: Coins },
+  { href: "/revenues", label: "收入", short: "收入", icon: Coins },
   { href: "/reconcile", label: "对账汇总", short: "对账", icon: Scale },
 ];
 

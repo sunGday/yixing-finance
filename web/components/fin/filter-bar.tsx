@@ -12,7 +12,21 @@ import { cn } from "@/lib/utils";
 import { SourceChip } from "./ui";
 import { ThemeToggle } from "./theme";
 
-type Field = "fund" | "network" | "status" | "subs" | "q";
+type Field = "fund" | "network" | "status" | "subs" | "q" | "basis";
+const BASIS = [["auto", "自动"], ["estimate", "预估"], ["settlement", "结算"]] as const;
+
+function BasisToggle({ value }: { value: Filters["basis"] }) {
+  return (
+    <div className="inline-flex rounded-md border bg-sunken p-0.5" role="group" aria-label="收入口径">
+      {BASIS.map(([k, l]) => (
+        <button key={k} type="button" onClick={() => patchQuery({ basis: k === "auto" ? null : k })}
+          className={cn("h-7 px-2 text-xs rounded focus-visible:outline-2 focus-visible:outline-brand", value === k ? "bg-surface text-brand font-medium shadow-sm" : "text-muted-foreground hover:text-foreground")}>
+          {l}
+        </button>
+      ))}
+    </div>
+  );
+}
 const QUICK = [["yesterday", "昨日"], ["7d", "近7日"], ["week", "本周"], ["month", "本月"]] as const;
 const sel = "h-8 rounded-md border bg-surface px-2 text-xs focus-visible:outline-2 focus-visible:outline-brand";
 
@@ -74,11 +88,14 @@ export function FilterBar({ fields, subOwners, defaults = {}, mixed = false }: {
           <option value="all">资金：全部</option>
         </select>
       )}
+      {has("basis") && !mobile && <BasisToggle value={f.basis} />}
       {has("network") && (
         <select aria-label="收入网络" className={sel} value={f.network} onChange={(e) => patchQuery({ network: e.target.value === "all" ? null : e.target.value })}>
           <option value="all">网络：全部</option>
           <option value="pangle">穿山甲</option>
           <option value="ylh">优量汇</option>
+          <option value="kuaishou">快手</option>
+          <option value="gm_adx">gm_adx</option>
         </select>
       )}
       {has("status") && (
@@ -108,13 +125,16 @@ export function FilterBar({ fields, subOwners, defaults = {}, mixed = false }: {
         <div className="min-w-0 flex-1">{controls(false)}</div>
         <SourceChip mock={f.mock} mixed={mixed} />
       </div>
-      <div className="md:hidden flex items-center gap-2">
-        <Button variant="outline" className="h-9 shrink-0" onClick={() => setOpen(true)}><SlidersHorizontal className="size-4" />筛选</Button>
-        <div className="flex gap-1 overflow-x-auto">
-          {chips.map((c) => <span key={c} className="shrink-0 rounded-full border bg-surface px-2 py-1 text-[11px]">{c}</span>)}
+      <div className="md:hidden flex flex-col gap-1.5">
+        <div className="flex items-center gap-2">
+          <Button variant="outline" className="h-9 shrink-0" onClick={() => setOpen(true)}><SlidersHorizontal className="size-4" />筛选</Button>
+          <div className="flex gap-1 overflow-x-auto">
+            {chips.map((c) => <span key={c} className="shrink-0 rounded-full border bg-surface px-2 py-1 text-[11px]">{c}</span>)}
+          </div>
+          <SourceChip mock={f.mock} mixed={mixed} className="ml-auto" />
+          <ThemeToggle className="h-9 shrink-0 rounded-md border px-2 text-xs" />
         </div>
-        <SourceChip mock={f.mock} mixed={mixed} className="ml-auto" />
-        <ThemeToggle className="h-9 shrink-0 rounded-md border px-2 text-xs" />
+        {has("basis") && <BasisToggle value={f.basis} />}
       </div>
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent side="bottom" className="max-h-[85dvh] overflow-y-auto">

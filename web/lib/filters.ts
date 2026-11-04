@@ -1,12 +1,15 @@
-import { AGENCY_OWNER_ID, type ReconStatus } from "./types";
+import { AGENCY_OWNER_ID, type AdNetwork, type ReconStatus } from "./types";
 import type { Unit } from "./format";
+
+export type RevenueBasis = "auto" | "estimate" | "settlement";
 
 /** 全局筛选（holiday §8），全部存在 URL query */
 export interface Filters {
   from: string; to: string; quick: string;
   agency: string; subs: string[];
   fund: "recharge" | "cost" | "snapshot" | "all";
-  network: "pangle" | "ylh" | "all";
+  network: AdNetwork | "all";
+  basis: RevenueBasis;
   status: ReconStatus | "all";
   unit: Unit; q: string; mock?: string;
 }
@@ -22,6 +25,13 @@ export function quickRange(q: string): [string, string] {
   return [y, y];
 }
 const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? "";
+const NETWORKS = ["pangle", "ylh", "kuaishou", "gm_adx"] as const;
+function parseNetwork(v: string): Filters["network"] {
+  return (NETWORKS as readonly string[]).includes(v) ? (v as Filters["network"]) : "all";
+}
+function parseBasis(v: string): Filters["basis"] {
+  return v === "estimate" || v === "settlement" ? v : "auto";
+}
 export function parseFilters(sp: SP, defaults: Partial<Filters> = {}): Filters {
   const quick = one(sp.quick) || (one(sp.from) ? "custom" : defaults.quick ?? "yesterday");
   const [qf, qt] = quickRange(quick);
@@ -30,7 +40,8 @@ export function parseFilters(sp: SP, defaults: Partial<Filters> = {}): Filters {
     agency: AGENCY_OWNER_ID,
     subs: one(sp.subs) ? one(sp.subs).split(",") : [],
     fund: (one(sp.fund) || defaults.fund || "recharge") as Filters["fund"],
-    network: (one(sp.network) || "all") as Filters["network"],
+    network: parseNetwork(one(sp.network)),
+    basis: parseBasis(one(sp.basis) || defaults.basis || ""),
     status: (one(sp.status) || defaults.status || "all") as Filters["status"],
     unit: one(sp.unit) === "fen" ? "fen" : "yuan",
     q: one(sp.q), mock: one(sp.mock) || undefined,

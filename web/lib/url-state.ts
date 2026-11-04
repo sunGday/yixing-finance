@@ -70,7 +70,7 @@ export function patchQuery(patch: Record<string, string | null>) {
   window.history.pushState(window.history.state, "", next);
 }
 
-const KEEP = ["quick", "from", "to", "subs", "unit", "mock"];
+const KEEP = ["quick", "from", "to", "subs", "unit", "mock", "basis", "section", "detail"];
 
 export function keptHref(path: string, search: string) {
   const cur = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
@@ -93,6 +93,7 @@ export function hrefFor(path: string, f: Filters, extra: Record<string, string> 
   } else if (f.quick) n.set("quick", f.quick);
   if (f.subs.length) n.set("subs", f.subs.join(","));
   if (f.unit === "fen") n.set("unit", "fen");
+  if (f.basis && f.basis !== "auto") n.set("basis", f.basis);
   if (f.mock) n.set("mock", f.mock);
   for (const [k, v] of Object.entries(extra)) {
     if (v) n.set(k, v);
