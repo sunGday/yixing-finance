@@ -1,0 +1,8 @@
+{
+  "private": true,
+  "scripts": {
+    "dev": "npm run dev --prefix web",
+    "build:pages": "npm run build:pages --prefix web",
+    "lint": "npm run lint --prefix web"
+  }
+}

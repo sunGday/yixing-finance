@@ -1,0 +1,5 @@
+[
+{"stat_date":"2026-11-03","owner_id":"1001678594","cost_fen":195776,"cash_cost_fen":195776,"grant_cost_fen":0,"source_api":"queryOwnerCost","request_id":"req-mock-c1"},
+{"stat_date":"2026-11-03","owner_id":"1001700001","cost_fen":88000,"cash_cost_fen":null,"grant_cost_fen":null,"source_api":"queryOwnerCost"},
+{"stat_date":"2026-11-02","owner_id":"1001678594","cost_fen":201210,"source_api":"queryOwnerCost"}
+]
