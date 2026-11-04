@@ -72,6 +72,7 @@ describe("basis and gap labels", () => {
     assert.match(explainGap("settlement_missing:2026-11"), /不是 0/);
     assert.match(explainGap("credential_missing:gromore"), /凭证未配齐/);
     assert.match(explainGap("fallback_rt_income:pangle_only"), /只含穿山甲/);
+    assert.equal(explainGap("gromore_fetch_failed"), "收入拉取失败");
   });
 });
 

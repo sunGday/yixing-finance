@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { buildOverview, type EstimateRow, type Settlement } from "./revenue-overview.ts";
-import { normalizeFixtureCosts, normalizeLiveCosts, profitAndLoss, sliceCostWindow } from "./pnl.ts";
+import { forRequestedRange, normalizeFixtureCosts, normalizeLiveCosts, profitAndLoss, shownCost, sliceCostWindow } from "./pnl.ts";
 import type { Cost } from "./types.ts";
 
 const TODAY = "2026-11-04";
@@ -11,13 +11,15 @@ const bills = JSON.parse(readFileSync(new URL("../fixtures/settlement-bills.json
 const costs = JSON.parse(readFileSync(new URL("../fixtures/costs.json", import.meta.url), "utf8")) as Cost[];
 
 describe("profit and loss", () => {
-  it("keeps a year failure on the previous overview instead of an auth wall", () => {
+  it("drops the previous range instead of holding it until both sides match", () => {
     const src = readFileSync(new URL("../app/overview-view.tsx", import.meta.url), "utf8");
-    assert.match(src, /盈亏/);
-    assert.match(src, /StaleNote/);
-    assert.match(src, /overviewRequest|\/revenues\/overview/);
-    assert.equal(src.includes("isCredentialGap"), false);
-    assert.equal(src.includes("毛利草稿"), false);
+    assert.equal(src.includes("useStableTrio"), false);
+    assert.match(src, /forRequestedRange/);
+    assert.match(src, /消耗 · 部分/);
+    assert.match(src, /收入拉取失败/);
+    const previous = { from: "2026-11-03", to: "2026-11-03", total_fen: 1 };
+    assert.equal(forRequestedRange(previous, "2026-01-01", "2026-11-03"), undefined);
+    assert.equal(forRequestedRange(previous, "2026-11-03", "2026-11-03"), previous);
   });
 
   it("subtracts a fully covered day", () => {
@@ -39,7 +41,30 @@ describe("profit and loss", () => {
     assert.match(cost.gap ?? "", /只覆盖/);
     const pnl = profitAndLoss(revenue, cost);
     assert.equal(pnl.fen, null);
-    assert.match(pnl.text, /不算盈亏/);
+    assert.match(pnl.text, /消耗覆盖/);
+    assert.equal(shownCost(cost).partial, true);
+    assert.equal(shownCost(cost).fen, cost.partial_fen);
+  });
+
+  it("uses a fully covered month inside a longer range", () => {
+    const items = [];
+    for (let day = 1; day <= 31; day++) {
+      items.push({ biz_date: `2026-10-${String(day).padStart(2, "0")}`, complete: true, cost_fen: 10 });
+    }
+    items.push({ biz_date: "2026-11-03", complete: true, cost_fen: 999 });
+    const cost = normalizeLiveCosts({ items }, "2026-01-01", "2026-11-03");
+    assert.equal(cost.total_fen, null);
+    const pnl = profitAndLoss({
+      total_fen: 5000,
+      from: "2026-01-01",
+      to: "2026-11-03",
+      by_month: [
+        { period: "2026-10", amount_fen: 1000 },
+        { period: "2026-11", amount_fen: 4000 },
+      ],
+    }, cost);
+    assert.equal(pnl.fen, 1000 - 31 * 10);
+    assert.match(pnl.text, /已覆盖 31 天/);
   });
 
   it("ignores partial_cost_fen and null cost_fen", () => {

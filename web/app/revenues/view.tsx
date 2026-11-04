@@ -20,6 +20,7 @@ import {
   normalizeCards, normalizeDetail, normalizeOverview, normalizeSettlementList, overviewRequest,
   settlementsRequest, shanghaiToday, type OverviewCard, type RevenueOverview, type Settlement, type SettlementInput,
 } from "@/lib/revenue-overview";
+import { forRequestedRange } from "@/lib/pnl";
 import { selectRevenues } from "@/lib/select";
 import { wantsLive } from "@/lib/source";
 import { liveDropPrefix } from "@/lib/live-cache";
@@ -114,12 +115,13 @@ export function RevenuesView() {
     setCredRetry(false);
   }, [credRetry, overviewLive.data]);
 
-  const overview = liveOn ? overviewLive.data : loadRevenueOverview(f.from, f.to, f.basis);
+  const overview = forRequestedRange(liveOn ? overviewLive.data : loadRevenueOverview(f.from, f.to, f.basis), f.from, f.to);
   const cards = liveOn ? cardsLive.data : loadRevenueCards(f.basis);
   const bills = liveOn ? (settleLive.data ?? []) : (localBills ?? loadSettlementFixtures());
   const detailHeld = useHeldRange(detailLive.data, f.from, f.to, liveOn && detailOpen);
-  const detailRows = detailOpen
-    ? selectRevenues(liveOn ? (detailLive.data?.items ?? []) : loadRevenueBundle(f).rv, { ...f, from: detailHeld.from, to: detailHeld.to })
+  const detailReady = !liveOn || (detailHeld.from === f.from && detailHeld.to === f.to);
+  const detailRows = detailOpen && detailReady
+    ? selectRevenues(liveOn ? (detailLive.data?.items ?? []) : loadRevenueBundle(f).rv, f)
     : [];
 
   async function write(path: string, method: string, body: unknown, done: string) {
@@ -177,7 +179,7 @@ export function RevenuesView() {
             <>
               {overview && overview.gap_flags.length > 0 ? <GapList flags={overview.gap_flags} showSync={credRetry} /> : null}
               {overviewLive.error && overview ? <StaleNote message={overviewLive.error.message} onRetry={overviewLive.retry} /> : null}
-              {liveOn && overviewLive.loading && !overview ? <Skeleton className="h-64" aria-busy="true" aria-label="分网络表加载中" />
+              {liveOn && !overview && (overviewLive.loading || overviewLive.refreshing) ? <Skeleton className="h-64" aria-busy="true" aria-label="分网络表加载中" />
                 : liveOn && overviewLive.error && !overview ? (
                   isCredentialGap(overviewLive.error)
                     ? <CredentialGapBanner message={overviewLive.error.message} requestId={overviewLive.error.requestId} gapFlags={overviewLive.error.gapFlags} onRetry={overviewLive.retry} showSync={credRetry} />
@@ -202,7 +204,7 @@ export function RevenuesView() {
               </div>
               {detailOpen ? (
                 <RevenueDetail
-                  rows={detailRows} unit={f.unit} loading={liveOn && detailLive.loading && detailRows.length === 0}
+                  rows={detailRows} unit={f.unit} loading={liveOn && detailOpen && !detailReady}
                   refreshing={liveOn && detailLive.refreshing}
                   error={detailRows.length ? undefined : detailLive.error}
                   onRetry={detailLive.retry} gapFlags={detailLive.data?.gap_flags}
