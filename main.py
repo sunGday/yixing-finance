@@ -9,15 +9,19 @@ from fastapi.responses import JSONResponse
 from adapters import CredentialMissingError
 from api.routes import router, ApiError, rid, VERSION
 import store as st
+from credentials_store import CredentialStore
 
 
-def create_app(recharge_store: st.RechargeStore | None = None, cost_store=None, snapshot_store=None) -> FastAPI:
+def create_app(recharge_store: st.RechargeStore | None = None, cost_store=None, snapshot_store=None,
+               credential_store: CredentialStore | None = None) -> FastAPI:
     app = FastAPI(title="yixing-finance", version=VERSION)
     app.state.recharges = recharge_store if recharge_store is not None else st.RechargeStore.from_cache()
     app.state.costs = cost_store if cost_store is not None else st.CostStore.from_disk()
     app.state.snapshots = snapshot_store if snapshot_store is not None else st.SnapshotStore.from_disk()
+    # 收入渠道凭证：FIN_SECRETS_DIR 文件 → 合并进 os.environ（进程 env 优先），适配器直接读
+    app.state.credentials = credential_store if credential_store is not None else CredentialStore()
     origins = [o for o in os.environ.get("FIN_CORS_ORIGINS", "*").split(",") if o]
-    app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST", "OPTIONS"],
+    app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
                        allow_headers=["*"], expose_headers=["X-Auth-Mode"])
 
     @app.middleware("http")
