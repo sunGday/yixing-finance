@@ -8,7 +8,7 @@ import { Banner, DayBars, Kpi, Money, PageHeader, Panel, SplitBar } from "@/comp
 import { loadOverview } from "@/lib/fx/overview";
 import type { Filters } from "@/lib/filters";
 import { formatFen } from "@/lib/format";
-import { chartDays, normalizeRecharges, rangeParams, selectRecharges, selectRecon, selectRevenues, sum } from "@/lib/select";
+import { chartDays, normalizeRecharges, rangeParams, rowNetworkParam, selectRecharges, selectRecon, selectRevenues, sum } from "@/lib/select";
 import { wantsLive } from "@/lib/source";
 import type { Recharge, ReconRow, Revenue, SubOwner } from "@/lib/types";
 import { LABEL } from "@/lib/types";
@@ -28,7 +28,7 @@ export function OverviewView() {
   const liveOn = wantsLive(f.mock);
   const live = useLiveMap(liveOn, [
     { key: "rc", path: "/recharges", params: { ...rangeParams(f), keyword: f.q || undefined } },
-    { key: "rv", path: "/revenues", params: { start_date: f.from, end_date: f.to, ad_network: f.network === "all" ? undefined : f.network } },
+    { key: "rv", path: "/revenues", params: { start_date: f.from, end_date: f.to, ad_network: rowNetworkParam(f.network) } },
     { key: "re", path: "/reconcile/summaries", params: rangeParams(f) },
   ]);
 

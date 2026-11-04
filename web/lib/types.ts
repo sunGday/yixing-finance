@@ -24,9 +24,11 @@ export interface BalanceSnapshot {
   snapshot_time: string; owner_id: string; total_balance_fen: number;
   cash_bal_fen?: number | null; today_total_cost_fen?: number | null;
 }
+/** GroMore 收益报表网络。明细接口仍只接受 pangle|ylh。 */
+export type AdNetwork = "pangle" | "ylh" | "kuaishou" | "gm_adx";
 /** §5 收入流水 */
 export interface Revenue {
-  revenue_id: string; ad_network: "pangle" | "ylh"; stat_date: string; stat_hour?: number | null;
+  revenue_id: string; ad_network: AdNetwork; stat_date: string; stat_hour?: number | null;
   amount_fen: number; gross_amount_fen?: number | null; fee_fen?: number | null;
   app_id?: string | null; placement_id?: string | null; ad_unit_id?: string | null;
   settlement_status?: "estimated" | "settled" | "paid" | null; paid_date?: string | null; evidence_ref?: string | null;
@@ -57,7 +59,7 @@ export const CHANNEL: Record<string, string> = {
   other: "其他",
 };
 export const LABEL = {
-  network: { pangle: "穿山甲", ylh: "优量汇" },
+  network: { pangle: "穿山甲", ylh: "优量汇", kuaishou: "快手", gm_adx: "gm_adx" },
   direction: { credit: "充值", debit: "扣回" },
   recon: { matched: "已匹配", partial: "部分匹配", unmatched: "未匹配" },
   rstatus: { raw: "原始", posted: "已过账", reversed: "已冲正" },

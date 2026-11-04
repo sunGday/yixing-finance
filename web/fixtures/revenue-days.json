@@ -1,0 +1,14 @@
+[
+  {"stat_date":"2026-10-01","ad_network":"pangle","amount_fen":100,"api_amount_fen":null},
+  {"stat_date":"2026-10-31","ad_network":"pangle","amount_fen":200,"api_amount_fen":null},
+  {"stat_date":"2026-11-01","ad_network":"pangle","amount_fen":120000,"api_amount_fen":118000},
+  {"stat_date":"2026-11-01","ad_network":"ylh","amount_fen":45000,"api_amount_fen":44000},
+  {"stat_date":"2026-11-01","ad_network":"kuaishou","amount_fen":22000,"api_amount_fen":null},
+  {"stat_date":"2026-11-01","ad_network":"gm_adx","amount_fen":800,"api_amount_fen":700},
+  {"stat_date":"2026-11-02","ad_network":null,"code":"99","amount_fen":100,"api_amount_fen":null},
+  {"stat_date":"2026-11-02","ad_network":"pangle","amount_fen":100000,"api_amount_fen":99000},
+  {"stat_date":"2026-11-03","ad_network":"pangle","amount_fen":567019,"api_amount_fen":null},
+  {"stat_date":"2026-11-03","ad_network":"ylh","amount_fen":656399,"api_amount_fen":null},
+  {"stat_date":"2026-11-03","ad_network":"kuaishou","amount_fen":116941,"api_amount_fen":null},
+  {"stat_date":"2026-11-03","ad_network":"gm_adx","amount_fen":0,"api_amount_fen":null}
+]
