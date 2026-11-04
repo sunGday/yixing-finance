@@ -11,6 +11,8 @@ export interface Recharge {
   balance_after_fen?: number | null; request_id?: string | null; evidence_path?: string | null;
   posted_ledger_id?: string | null; status: "raw" | "posted" | "reversed";
   reversal_of?: string | null; reversed_by?: string | null;
+  side?: "omni_parent_in" | "platform_direct" | "transfer_out" | "reclaim_in" | null;
+  bill_sub?: number | null; bill_desc?: string | null; to_owner_name?: string | null;
 }
 /** §4 消耗 */
 export interface Cost {

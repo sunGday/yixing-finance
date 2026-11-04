@@ -65,7 +65,7 @@ python3 -m unittest discover -s tests -t . -v
 - CORS：`FIN_CORS_ORIGINS`（逗号分隔，默认 `*`，上线前收紧）
 - 充值：只读 Omni billHis JSONL（自动搜 `../**/billHis-1001108443-*.jsonl`，或 `FIN_RECHARGE_JSONL`）
 - 收入：无 `PANGLE_*` / `YLH_*` → `source:"mock"` + `gap_flags: credential_missing:*`。穿山甲凭证齐全 → 真拉 CSJ `rt/income`（上海时区，金额分，`source:"live"`）。优量汇仍是骨架。只缺优量汇时整页仍 200，`gap_flags` 保留 `credential_missing:ylh`，不再因穿山甲未复核而 503。`?strict=true` 或 `FIN_REVENUE_MOCK=0` 仅当**所请求的每个网络都缺凭证**时 503 `50301`。mock 不进对账
-- 概览和充值页在真数据下仍用 fixtures 画消耗与余额快照（这两个接口是空 stub）
+- 概览盈亏：收入用 `/revenues/overview`，消耗用 `/costs`。消耗没铺满所选区间时盈亏留空。充值页只显示 `omni_parent_in`（`/recharges?side=omni_parent_in` 与 `/recharges/summary`）。消耗子户表和余额快照仍可用样例。
 
 ## 已锁定口径
 

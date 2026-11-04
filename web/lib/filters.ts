@@ -21,6 +21,8 @@ export type SP = Record<string, string | string[] | undefined>;
 export const TODAY = "2026-11-04";
 /** 收入页默认：本年截止到昨天，口径预估（GroMore 分网络，不把整月结算单换成总额）。 */
 export const revenueDefaults: Partial<Filters> = { quick: "year", basis: "estimate" };
+/** 概览默认：本年合计。口径自动，有整月结算单用结算，否则用预估。 */
+export const overviewDefaults: Partial<Filters> = { quick: "year", basis: "auto" };
 const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? "";
 const NETWORKS = ["pangle", "ylh", "kuaishou", "gm_adx"] as const;
 function parseNetwork(v: string): Filters["network"] {
