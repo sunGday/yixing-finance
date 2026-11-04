@@ -1,7 +1,7 @@
 "use client";
 
 import { FilterBar } from "@/components/fin/filter-bar";
-import { ErrorState, SourceTag, StatusChip } from "@/components/fin/bits";
+import { ErrorState, SourceTag, StaleNote, StatusChip } from "@/components/fin/bits";
 import { PageSkeleton } from "@/components/fin/page-skeleton";
 import { DayBars, Empty, Kpi, Money, PageHeader, Panel, Responsive } from "@/components/fin/ui";
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -11,7 +11,7 @@ import { formatFen } from "@/lib/format";
 import { chartDays, normalizeRecharges, rangeParams, selectRecharges, sum } from "@/lib/select";
 import { wantsLive } from "@/lib/source";
 import { CHANNEL, LABEL, type Recharge, type SubOwner } from "@/lib/types";
-import { useFilters } from "@/lib/url-state";
+import { useFilters, useHeldRange } from "@/lib/url-state";
 import { useLiveMap } from "@/lib/use-live";
 import { cn } from "@/lib/utils";
 
@@ -31,26 +31,32 @@ export function RechargesView() {
     { key: "rc", path: "/recharges", params: { ...rangeParams(f), keyword: f.q || undefined } },
   ]);
   const fund = f.fund === "all" ? "recharge" : f.fund;
+  const held = useHeldRange(live.data, f.from, f.to, liveOn);
+  const ff = { ...f, from: held.from, to: held.to };
+  const rc = liveOn && live.data ? selectRecharges(normalizeRecharges(live.data.rc as Recharge[]), ff) : fx.rc;
   return (
     <>
       <FilterBar fields={["subs", "fund", "q"]} subOwners={fx.subs} defaults={defaults} mixed />
       <div className="px-3 md:px-4 py-3 flex flex-col gap-3">
         {f.mock === "error" ? <ErrorState path="/recharges" message="mock 故障注入" requestId="req-mock-error" />
-          : liveOn && live.loading ? <PageSkeleton />
-          : liveOn && live.error ? <ErrorState {...live.error} onRetry={live.retry} />
-          : <Content f={f} fx={fx} fund={fund} liveOn={liveOn} rc={liveOn && live.data ? selectRecharges(normalizeRecharges(live.data.rc as Recharge[]), f) : fx.rc} />}
+          : liveOn && live.loading && !live.data ? <PageSkeleton />
+          : liveOn && live.error && !live.data ? <ErrorState {...live.error} onRetry={live.retry} />
+          : <>
+            {live.error && live.data ? <StaleNote message={live.error.message} onRetry={live.retry} /> : null}
+            <Content f={f} range={ff} fx={fx} fund={fund} liveOn={liveOn} rc={rc} refreshing={live.refreshing} />
+          </>}
       </div>
     </>
   );
 }
 
-function Content({ f, fx, fund, rc, liveOn }: { f: Filters; fx: ReturnType<typeof loadRechargeBundle>; fund: Filters["fund"]; rc: Recharge[]; liveOn: boolean }) {
+function Content({ f, range, fx, fund, rc, liveOn, refreshing = false }: { f: Filters; range: Filters; fx: ReturnType<typeof loadRechargeBundle>; fund: Filters["fund"]; rc: Recharge[]; liveOn: boolean; refreshing?: boolean }) {
   const { cs, sn, subs } = fx;
   const u = f.unit;
   const liveRows = rc.filter((r) => r.status !== "reversed");
   const credit = sum(liveRows.filter((r) => r.direction === "credit"), (r) => r.amount_fen);
   const debit = sum(liveRows.filter((r) => r.direction === "debit"), (r) => r.amount_fen);
-  const days = chartDays(f.from, f.to);
+  const days = chartDays(range.from, range.to);
   const widened = !liveOn && days[0] < f.from;
   const chartFx = widened ? loadRechargeBundle({ ...f, from: days[0], to: f.to }) : { rc, cs };
   const series = days.map((day) => ({
@@ -60,7 +66,7 @@ function Content({ f, fx, fund, rc, liveOn }: { f: Filters; fx: ReturnType<typeo
   }));
   return (
     <>
-      <PageHeader title="充值流水" unit={u} from={f.from} to={f.to} />
+      <PageHeader title="充值流水" unit={u} from={f.from} to={f.to} status={refreshing ? "更新中" : null} />
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
         <Kpi size="lg" label="区间充值" value={formatFen(credit, u)} hint="不含已冲正" />
         <Kpi label="笔数" value={`${rc.length}`} hint={`有效 ${liveRows.length}`} />

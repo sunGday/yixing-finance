@@ -27,7 +27,7 @@ function BasisToggle({ value }: { value: Filters["basis"] }) {
     </div>
   );
 }
-const QUICK = [["yesterday", "昨日"], ["7d", "近7日"], ["week", "本周"], ["month", "本月"]] as const;
+const QUICK = [["year", "本年"], ["yesterday", "昨日"], ["7d", "近7日"], ["week", "本周"], ["month", "本月"]] as const;
 const sel = "h-8 rounded-md border bg-surface px-2 text-xs focus-visible:outline-2 focus-visible:outline-brand";
 
 export function FilterBar({ fields, subOwners, defaults = {}, mixed = false }: {

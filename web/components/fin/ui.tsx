@@ -27,8 +27,8 @@ export function SourceChip({ mock, mixed, className }: { mock?: string; mixed?: 
   );
 }
 
-export function PageHeader({ title, unit, from, to, badge = "只读" }: {
-  title: string; unit: Unit; from: string; to: string; badge?: string | null;
+export function PageHeader({ title, unit, from, to, badge = "只读", status }: {
+  title: string; unit: Unit; from: string; to: string; badge?: string | null; status?: string | null;
 }) {
   return (
     <div className="flex items-end justify-between gap-3">
@@ -38,7 +38,10 @@ export function PageHeader({ title, unit, from, to, badge = "只读" }: {
           单位 {unitLabel(unit)} · {from} ~ {to}
         </p>
       </div>
-      {badge ? <span className="shrink-0 rounded border bg-sunken px-2 py-0.5 text-[11px] text-muted-foreground">{badge}</span> : null}
+      <div className="flex items-center gap-2">
+        {status ? <span role="status" className="text-[11px] text-brand">{status}</span> : null}
+        {badge ? <span className="shrink-0 rounded border bg-sunken px-2 py-0.5 text-[11px] text-muted-foreground">{badge}</span> : null}
+      </div>
     </div>
   );
 }

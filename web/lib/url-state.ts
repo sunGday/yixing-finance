@@ -1,7 +1,8 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { useRef, useSyncExternalStore } from "react";
 import { parseFilters, type Filters, type SP } from "./filters";
+import { applyQueryPatch } from "./query-patch";
 
 const listeners = new Set<() => void>();
 
@@ -22,22 +23,23 @@ function getClientSearch() {
   return window.location.search;
 }
 
+const nativeReplaceState = typeof History === "undefined" ? undefined : History.prototype.replaceState;
+
 function installHistoryPatch() {
   if (typeof window === "undefined") return;
   const w = window as Window & { __yxHistory?: boolean };
   if (w.__yxHistory) return;
   w.__yxHistory = true;
-  const wrap = (orig: typeof history.pushState) =>
-    function (this: History, ...args: Parameters<typeof history.pushState>) {
-      const ret = orig.apply(this, args);
-      emit();
-      return ret;
-    };
-  history.pushState = wrap(history.pushState);
-  history.replaceState = wrap(history.replaceState);
+  // 不包一层 history.pushState。Next 15 会把外部 pushState/replaceState 当成路由恢复，
+  // 从而挂上 app/loading 的整页骨架。筛选只改地址栏，走原型上的原生 replaceState。
   window.addEventListener("popstate", emit);
 }
 installHistoryPatch();
+
+/** Link 换了路径之后，把地址栏同步进筛选 store。 */
+export function notifyLocation() {
+  emit();
+}
 
 function toSP(search: string): SP {
   const q = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
@@ -57,17 +59,27 @@ export function useQueryString() {
   return useSyncExternalStore(subscribe, getClientSearch, getServerSearch);
 }
 
-/** 改 query，不走服务端。静态页与 dev 共用。 */
+/**
+ * 改 query，不走 Next 路由。replaceState 留在当前历史记录上，
+ * 避免每次点击都压一条记录，返回时被 App Router 整页刷新。
+ */
 export function patchQuery(patch: Record<string, string | null>) {
   if (typeof window === "undefined") return;
-  const url = new URL(window.location.href);
-  for (const [k, v] of Object.entries(patch)) {
-    if (v == null || v === "") url.searchParams.delete(k);
-    else url.searchParams.set(k, v);
-  }
-  const next = `${url.pathname}${url.search}${url.hash}`;
-  if (next === `${window.location.pathname}${window.location.search}${window.location.hash}`) return;
-  window.history.pushState(window.history.state, "", next);
+  const next = applyQueryPatch(window.location.href, patch);
+  if (!next || !nativeReplaceState) return;
+  nativeReplaceState.call(window.history, window.history.state, "", next);
+  emit();
+}
+
+/**
+ * 日期已经变了、数据还是上一请求的时候，列表仍按上一份数据的区间筛。
+ * 网络、状态、单位走当前筛选，点击立刻生效，不必等接口。
+ */
+export function useHeldRange(data: unknown, from: string, to: string, enabled: boolean) {
+  const ref = useRef({ data, from, to });
+  if (!enabled) return { from, to };
+  if (data !== ref.current.data) ref.current = { data, from, to };
+  return { from: ref.current.from, to: ref.current.to };
 }
 
 const KEEP = ["quick", "from", "to", "subs", "unit", "mock", "basis", "section", "detail"];

@@ -43,15 +43,20 @@ function fail(path: string, res: Response, body: Envelope<unknown>): never {
   );
 }
 
-export async function apiList<T>(path: string, params: Record<string, string | undefined>): Promise<T[]> {
+function isAbort(e: unknown): boolean {
+  return !!e && typeof e === "object" && (e as { name?: string }).name === "AbortError";
+}
+
+export async function apiList<T>(path: string, params: Record<string, string | undefined>, signal?: AbortSignal): Promise<T[]> {
   const base = resolveApiBase();
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) if (v) qs.set(k, v);
   qs.set("page_size", "500");
   let res: Response;
   try {
-    res = await fetch(`${base}${path}?${qs}`, { cache: "no-store" });
+    res = await fetch(`${base}${path}?${qs}`, { cache: "no-store", signal });
   } catch (e) {
+    if (isAbort(e) || signal?.aborted) throw e;
     throw new LoadError(path, `网络错误：${String(e)}`);
   }
   let body: Envelope<{ items: T[] } | T[]>;
@@ -62,7 +67,7 @@ export async function apiList<T>(path: string, params: Record<string, string | u
 }
 
 /** Envelope call for non-list routes. Does not log the body. */
-export async function apiSend<T>(path: string, init?: { method?: string; body?: unknown; cache?: RequestCache }): Promise<T> {
+export async function apiSend<T>(path: string, init?: { method?: string; body?: unknown; cache?: RequestCache; signal?: AbortSignal }): Promise<T> {
   const base = resolveApiBase();
   const method = (init?.method ?? "GET").toUpperCase();
   const headers = new Headers();
@@ -75,8 +80,10 @@ export async function apiSend<T>(path: string, init?: { method?: string; body?: 
       cache: "no-store",
       headers,
       body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
+      signal: init?.signal,
     });
   } catch (e) {
+    if (isAbort(e) || init?.signal?.aborted) throw e;
     throw new LoadError(path, `网络错误：${String(e)}`);
   }
   if (res.status === 204) return undefined as T;

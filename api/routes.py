@@ -157,7 +157,16 @@ def _gromore(req: Request):
     if client is not None:
         return client
     from adapters.gromore import GroMoreClient
-    return GroMoreClient()
+    client = GroMoreClient()
+    req.app.state.gromore_client = client
+    return client
+
+
+def _invalidate_gromore(req: Request) -> None:
+    client = getattr(req.app.state, "gromore_client", None)
+    clear = getattr(client, "clear_cache", None)
+    if callable(clear):
+        clear()
 
 
 def _settle_items(req: Request):
@@ -329,19 +338,25 @@ def credentials_get(req: Request, channel: str):
 async def credentials_put(req: Request, channel: str):
     """整渠道替换：body 中的键即该渠道全部文件凭证（未给的键从文件移除）。"""
     fields = await _cred_body(req)
-    return ok(_cred(req.app.state.credentials.upsert, channel, fields, True))
+    data = _cred(req.app.state.credentials.upsert, channel, fields, True)
+    _invalidate_gromore(req)
+    return ok(data)
 
 
 @router.patch("/credentials/{channel}")
 async def credentials_patch(req: Request, channel: str):
     """部分更新：未出现的键保留，空串清除该键。"""
     fields = await _cred_body(req)
-    return ok(_cred(req.app.state.credentials.upsert, channel, fields, False))
+    data = _cred(req.app.state.credentials.upsert, channel, fields, False)
+    _invalidate_gromore(req)
+    return ok(data)
 
 
 @router.delete("/credentials/{channel}")
 def credentials_delete(req: Request, channel: str):
-    return ok(_cred(req.app.state.credentials.delete, channel))
+    data = _cred(req.app.state.credentials.delete, channel)
+    _invalidate_gromore(req)
+    return ok(data)
 
 
 # ---- 结算单（v0.6 · 手工，DATA_DIR/settlements.json，鉴权与其它写接口相同）----

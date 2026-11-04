@@ -28,6 +28,14 @@ export function StatusChip({ s }: { s?: string | null }) {
 export function SourceTag({ s }: { s: string }) {
   return <span className="rounded border px-1.5 py-0.5 text-[11px] text-muted-foreground">{s}</span>;
 }
+export function StaleNote({ message, onRetry }: { message: string; onRetry?: () => void }) {
+  return (
+    <div role="alert" className="rounded-md bg-danger-bg text-danger px-3 py-2 text-xs flex items-center justify-between gap-2">
+      <span>更新失败，仍显示上一份：{message}</span>
+      {onRetry ? <button type="button" className="underline shrink-0" onClick={onRetry}>重试</button> : null}
+    </div>
+  );
+}
 export function ErrorState({ path, message, requestId, onRetry }: { path: string; message: string; requestId?: string; onRetry?: () => void }) {
   const r = useRouter();
   return (

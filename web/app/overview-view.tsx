@@ -2,17 +2,17 @@
 
 import Link from "next/link";
 import { FilterBar } from "@/components/fin/filter-bar";
-import { ErrorState, StatusChip } from "@/components/fin/bits";
+import { ErrorState, StaleNote, StatusChip } from "@/components/fin/bits";
 import { PageSkeleton } from "@/components/fin/page-skeleton";
 import { Banner, DayBars, Kpi, Money, PageHeader, Panel, SplitBar } from "@/components/fin/ui";
 import { loadOverview } from "@/lib/fx/overview";
 import type { Filters } from "@/lib/filters";
 import { formatFen } from "@/lib/format";
-import { chartDays, normalizeRecharges, rangeParams, rowNetworkParam, selectRecharges, selectRecon, selectRevenues, sum } from "@/lib/select";
+import { chartDays, normalizeRecharges, rangeParams, selectRecharges, selectRecon, selectRevenues, sum } from "@/lib/select";
 import { wantsLive } from "@/lib/source";
 import type { Recharge, ReconRow, Revenue, SubOwner } from "@/lib/types";
 import { LABEL } from "@/lib/types";
-import { hrefFor, useFilters } from "@/lib/url-state";
+import { hrefFor, useFilters, useHeldRange } from "@/lib/url-state";
 import { useLiveMap } from "@/lib/use-live";
 
 const linkCls = "block h-full rounded-lg focus-visible:outline-2 focus-visible:outline-brand";
@@ -28,7 +28,7 @@ export function OverviewView() {
   const liveOn = wantsLive(f.mock);
   const live = useLiveMap(liveOn, [
     { key: "rc", path: "/recharges", params: { ...rangeParams(f), keyword: f.q || undefined } },
-    { key: "rv", path: "/revenues", params: { start_date: f.from, end_date: f.to, ad_network: rowNetworkParam(f.network) } },
+    { key: "rv", path: "/revenues", params: { start_date: f.from, end_date: f.to } },
     { key: "re", path: "/reconcile/summaries", params: rangeParams(f) },
   ]);
 
@@ -46,15 +46,17 @@ function Body({ f, fx, liveOn, live }: {
   liveOn: boolean;
   live: ReturnType<typeof useLiveMap>;
 }) {
+  const held = useHeldRange(live.data, f.from, f.to, liveOn);
+  const ff = { ...f, from: held.from, to: held.to };
   if (f.mock === "error") return <div className="p-4"><ErrorState path="/recharges" message="mock 故障注入" requestId="req-mock-error" /></div>;
-  if (liveOn && live.loading) return <PageSkeleton />;
-  if (liveOn && live.error) return <div className="p-4"><ErrorState {...live.error} onRetry={live.retry} /></div>;
+  if (liveOn && live.loading && !live.data) return <PageSkeleton />;
+  if (liveOn && live.error && !live.data) return <div className="p-4"><ErrorState {...live.error} onRetry={live.retry} /></div>;
 
   const data = liveOn && live.data ? {
     ...fx,
-    rc: selectRecharges(normalizeRecharges(live.data.rc as Recharge[]), f),
-    rv: selectRevenues(live.data.rv as Revenue[], f),
-    re: selectRecon(live.data.re as ReconRow[], { ...f, status: "all" }),
+    rc: selectRecharges(normalizeRecharges(live.data.rc as Recharge[]), ff),
+    rv: selectRevenues(live.data.rv as Revenue[], ff),
+    re: selectRecon(live.data.re as ReconRow[], { ...ff, status: "all" }),
   } : fx;
 
   const { rc, cs, sn, rv, re, subs } = data;
@@ -66,9 +68,9 @@ function Body({ f, fx, liveOn, live }: {
   const delta = sum(re.filter((r) => r.tab !== "cross_source"), (r) => r.delta_fen);
   const unm = re.filter((r) => r.status === "unmatched");
   const part = re.filter((r) => r.status === "partial").length;
-  const days = chartDays(f.from, f.to);
-  const widened = !liveOn && days[0] < f.from;
-  const chartSrc = widened ? loadOverview({ ...f, from: days[0], to: f.to }) : data;
+  const days = chartDays(ff.from, ff.to);
+  const widened = !liveOn && days[0] < ff.from;
+  const chartSrc = widened ? loadOverview({ ...ff, from: days[0], to: ff.to }) : data;
   const series = days.map((day) => ({
     day,
     recharge: sum(chartSrc.rc.filter((r) => r.biz_date === day && r.direction === "credit" && r.status !== "reversed"), (r) => r.amount_fen),
@@ -78,7 +80,8 @@ function Body({ f, fx, liveOn, live }: {
 
   return (
     <div className="px-3 md:px-4 py-3 flex flex-col gap-3">
-      <PageHeader title="概览" unit={u} from={f.from} to={f.to} />
+      <PageHeader title="概览" unit={u} from={f.from} to={f.to} status={live.refreshing ? "更新中" : null} />
+      {live.error && live.data ? <StaleNote message={live.error.message} onRetry={live.retry} /> : null}
       {part > 0 && <Banner tone="warning">部分匹配 {part} 条（缺快照或结算未出），合计可能不完整。</Banner>}
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-2">
         <Link href={hrefFor("/recharges", f, { fund: "recharge" })} className={linkCls}>
