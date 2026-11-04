@@ -1,6 +1,6 @@
 # 翊行二代户财务系统 API 草案 · REQ-20261104-10C（**v0.2 草案**，2026-11-04）
 字段真源：`holiday-finance/reports/2026-11-04-yixing-finance-fields.md` §3 充值 / §5 收入 / §6 对账 / §10。
-金额一律 **int 分**；时间 Asia/Shanghai；**未 push，未建远程仓库**（等 Allen 确认）。充值主口径**已锁定** `basis=omni_parent_in`（别名 `gen1_transfer_in`）（user_locked，2026-11-04）；`settlement_basis: user_locked`（关账以结算）。
+金额一律 **int 分**；时间 Asia/Shanghai；仓库 https://github.com/sunGday/yixing-finance （初始 commit 已推 main）。充值主口径**已锁定** `basis=omni_parent_in`（别名 `gen1_transfer_in`）（user_locked，2026-11-04）；`settlement_basis: user_locked`（关账以结算）。
 
 ## 0. 通用
 - 前缀 `/api/v1`；鉴权占位 `Authorization: Bearer <internal-token>`（token 走 env `FIN_API_TOKEN`，不入库）；角色占位 `viewer|operator|admin`，写接口需 operator+。
@@ -53,7 +53,7 @@
 旁报维度（`side=platform_direct|transfer_out|reclaim_in`，不并入主合计）：平台直充 billSub=100、二代→子户划拨、子户划回回收。
 结算（**user_locked**）：日常 `/revenues`、`/reconcile/summaries` 可传 `settlement_status=estimated|settled`；**关账路径强制 settled**。
 
-> 仓库：将迁独立 GitHub 仓 `sunGday/yixing-finance`（Allen 建空仓后发 URL 再 push）；当前禁止 push / 建远程。
+> 仓库：https://github.com/sunGday/yixing-finance
 ### `POST /api/v1/recharges/sync`
 请求 `{"start_date":"2026-11-01","end_date":"2026-11-03","dry_run":false}` → 只读拉 Omni billHis，按 txn_id upsert：
 ```json
@@ -89,22 +89,50 @@
 请求 `{"ad_network":"pangle","start_date":"2026-11-03","end_date":"2026-11-03","dry_run":true}`；v0.2 骨架 **dry_run 只返回拼装请求**（`verified:false`），不发真实 HTTP；凭证缺失 → 50301 `missing env: PANGLE_…`。
 同步策略（草案）：每日 10:00 拉 T-1 estimated，T+3 覆盖；结算确认走 MANUAL（§9）置 settled/paid。
 
-## 3. 对账汇总（§6）
-### `GET /api/v1/reconcile/summaries?start_date&end_date&granularity=day|week|month&to_owner_id&status=matched|partial|unmatched`
+## 3. 对账汇总（§6）— **UI 契约已与 jack `ReconRow` 对齐（稳定段）**
+### 行字段（`items[]`）
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| recon_id | 必 | 稳定 id，如 `RC-YYYYMMDD-FE-<owner>` |
+| biz_date | 必 | `YYYY-MM-DD` |
+| scope | 必 | `owner:<id>` / `agency:<id>` / `network:pangle\|ylh` |
+| **tab** | 必 | UI 四 Tab 枚举（见下） |
+| left_fen / right_fen / delta_fen | 可空 | 缺侧为 `null`，**禁止静默 0**；`delta=left−right` 仅两侧齐全时算 |
+| status | 必 | `matched`\|`partial`\|`unmatched` |
+| note | 可 | 人读说明 |
+| evidence_paths | 必 | `string[]`（可空数组） |
+| **components** | 可 | 抽屉明细：`{label, ref, amount_fen}`；`amount_fen` 可 null；消耗/扣回用负分 |
+| gap_flags | 可 | 工程旁报，如 `open_balance_missing`（UI 可折叠进 note） |
+
+### `tab` 枚举（= jack `ReconTab`，URL `?tab=`）
+| tab | 中文 | 对应规则 |
+|---|---|---|
+| `fund_equation` | 资金等式 | left=期末−期初；right=Σ充值−Σ消耗±Σ调整；容差 0 分 |
+| `agency_daily` | 代理商日汇总 | 子户加总 vs 代理商层 |
+| `revenue_dedup` | 收入去重/预估vs结算 | 键 `ad_network+stat_date+revenue_id`；estimated vs settled |
+| `cross_source` | 跨源观察 | 毛利草稿 `Σ净收入 − Σ Omni 消耗`，固定非关账；缺网 → partial + null |
+
+> 旧草案 `kind=daily_fund_equation|gross_profit_draft` **废弃**，一律用 `tab`。
+
+### `GET /api/v1/reconcile/summaries?start_date&end_date&granularity=day|week|month&to_owner_id&status=matched|partial|unmatched&tab=`
 ```json
 {"code":0,"data":{"items":[
- {"recon_id":"fund-2026-11-03-123","biz_date":"2026-11-03","scope":"owner:123","kind":"daily_fund_equation",
-  "left_fen":50,"right_fen":50,"delta_fen":0,"status":"matched","gap_flags":[],"note":"","evidence_paths":[]},
- {"recon_id":"gp-2026-11-03","biz_date":"2026-11-03","scope":"agency:1001108443","kind":"gross_profit_draft",
-  "revenue_net_fen":null,"cost_fen":300,"gross_profit_draft_fen":null,"label":"非关账",
-  "gap_flags":["revenue_missing:ylh"],"status":"partial"}]}}
+ {"recon_id":"RC-20261103-FE-123","biz_date":"2026-11-03","scope":"owner:123","tab":"fund_equation",
+  "left_fen":50,"right_fen":50,"delta_fen":0,"status":"matched","note":"Δ余额=Σ充值−Σ消耗",
+  "evidence_paths":[],"gap_flags":[],
+  "components":[{"label":"Σ充值","ref":"OMNI-…","amount_fen":100},{"label":"Σ消耗","ref":"cost 2026-11-03","amount_fen":-50}]},
+ {"recon_id":"RC-20261103-X","biz_date":"2026-11-03","scope":"agency:1001108443","tab":"cross_source",
+  "left_fen":null,"right_fen":300,"delta_fen":null,"status":"partial","note":"毛利草稿（非关账）",
+  "evidence_paths":[],"gap_flags":["revenue_missing:ylh"],"components":[]}
+]}}
 ```
-- 日资金等式：`left=期末−期初`，`right=Σ充值−Σ消耗±Σ调整`，`delta=left−right`；容差 0 分。任一侧缺数 → `partial`（全缺 `unmatched`），`delta_fen=null` + gap_flags（`open_balance_missing` / `close_balance_missing` / `recharge_missing` / `cost_missing`），**禁止静默 0**。
+- 任一侧缺数 → `partial`（全缺 `unmatched`），`delta_fen=null` + gap_flags（`open_balance_missing` / `close_balance_missing` / `recharge_missing` / `cost_missing`）。
 - 单笔唯一性：`agency_owner_id+txn_id` 重复 → `gap_flags:["duplicate_txn"]`。
-- 收入去重：`ad_network+stat_date+revenue_id`。
-- 毛利草稿：`Σ净收入 − Σ Omni 消耗`，固定 `label:"非关账"`；任一网络缺 → `revenue_missing:<net>` 且毛利 null。
 ### `POST /api/v1/reconcile/summaries/rebuild`
 `{"start_date":"2026-11-01","end_date":"2026-11-03"}` → `{"code":0,"data":{"rebuilt":3,"partial":1,"unmatched":0}}`
+
+### 鉴权（TBD，占位）
+`Authorization: Bearer <FIN_API_TOKEN>`；角色 `viewer|operator|admin`；读接口 viewer+，rebuild 需 operator+。正式方案未定，**jack 先 fixtures / mock，勿绑死登录流**。
 
 ## 4. 收入适配器（代码：`adapters/`）
 - `get_adapter("pangle"|"ylh"|"gdt")`；`build_request()` 仅 dry-run（`verified:false`）；`fetch()` 抛 NotImplementedError。

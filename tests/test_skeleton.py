@@ -55,11 +55,15 @@ class T(unittest.TestCase):
             to_recharge_dto({"billTime": "2026-11-03 00:00:00"})
 
     def test_recon(self):
-        self.assertEqual(daily_fund_equation("d", 1, 100, 150, 100, 50)["status"], "matched")
+        fe = daily_fund_equation("d", 1, 100, 150, 100, 50)
+        self.assertEqual(fe["status"], "matched")
+        self.assertEqual(fe["tab"], "fund_equation")
+        self.assertIn("components", fe)
         r = daily_fund_equation("d", 1, None, 150, 100, 50)
         self.assertEqual((r["status"], r["delta_fen"]), ("partial", None))
         g = gross_profit_draft("d", {"pangle": 500}, 300)
         self.assertIsNone(g["gross_profit_draft_fen"]); self.assertIn("revenue_missing:ylh", g["gap_flags"]); self.assertEqual(g["label"], "非关账")
+        self.assertEqual(g["tab"], "cross_source")
 
 
 if __name__ == "__main__":
