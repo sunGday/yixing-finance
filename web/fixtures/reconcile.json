@@ -1,0 +1,118 @@
+[
+  {
+    "recon_id": "RC-20261103-FE-1001678594",
+    "biz_date": "2026-11-03",
+    "scope": "owner:1001678594",
+    "tab": "fund_equation",
+    "left_fen": 304224,
+    "right_fen": 304224,
+    "delta_fen": 0,
+    "status": "matched",
+    "note": "Δ余额 = Σ充值 − Σ消耗",
+    "evidence_paths": [
+      "mario/out/2026-11-03/balance.json"
+    ],
+    "components": [
+      {
+        "label": "Σ充值",
+        "ref": "OMNI-20261103-0001",
+        "amount_fen": 500000
+      },
+      {
+        "label": "Σ消耗",
+        "ref": "cost 2026-11-03",
+        "amount_fen": -195776
+      }
+    ]
+  },
+  {
+    "recon_id": "RC-20261103-FE-1001700001",
+    "biz_date": "2026-11-03",
+    "scope": "owner:1001700001",
+    "tab": "fund_equation",
+    "left_fen": null,
+    "right_fen": 112000,
+    "delta_fen": null,
+    "status": "partial",
+    "note": "缺期初余额快照（snapshot_time），无法计算 Δ余额",
+    "evidence_paths": [],
+    "components": [
+      {
+        "label": "Σ充值",
+        "ref": "OMNI-20261103-0002",
+        "amount_fen": 200000
+      },
+      {
+        "label": "Σ消耗",
+        "ref": "cost 2026-11-03",
+        "amount_fen": -88000
+      }
+    ],
+    "gap_flags": [
+      "open_balance_missing"
+    ]
+  },
+  {
+    "recon_id": "RC-20261102-FE-1001700002",
+    "biz_date": "2026-11-02",
+    "scope": "owner:1001700002",
+    "tab": "fund_equation",
+    "left_fen": -120000,
+    "right_fen": -100000,
+    "delta_fen": -20000,
+    "status": "unmatched",
+    "note": "余额下降多于扣回，疑似漏拉消耗",
+    "evidence_paths": [
+      "mario/out/2026-11-02/balance.json"
+    ],
+    "components": [
+      {
+        "label": "扣回",
+        "ref": "OMNI-20261102-0007",
+        "amount_fen": -100000
+      }
+    ]
+  },
+  {
+    "recon_id": "RC-20261103-AG",
+    "biz_date": "2026-11-03",
+    "scope": "agency:1001108443",
+    "tab": "agency_daily",
+    "left_fen": 700000,
+    "right_fen": 700000,
+    "delta_fen": 0,
+    "status": "matched",
+    "note": "子户加总 = 代理商层",
+    "evidence_paths": []
+  },
+  {
+    "recon_id": "RC-20261103-RV-pangle",
+    "biz_date": "2026-11-03",
+    "scope": "network:pangle",
+    "tab": "revenue_dedup",
+    "left_fen": 123456,
+    "right_fen": null,
+    "delta_fen": null,
+    "status": "partial",
+    "note": "仅预估，结算未出",
+    "evidence_paths": [],
+    "gap_flags": [
+      "revenue_missing:settlement"
+    ]
+  },
+  {
+    "recon_id": "RC-20261103-X",
+    "biz_date": "2026-11-03",
+    "scope": "agency:1001108443",
+    "tab": "cross_source",
+    "left_fen": 169134,
+    "right_fen": 283776,
+    "delta_fen": -114642,
+    "status": "unmatched",
+    "note": "毛利草稿（仅观察·非关账口径）",
+    "evidence_paths": [],
+    "gap_flags": [
+      "revenue_missing:ylh"
+    ]
+  }
+]

@@ -1,0 +1,5 @@
+[
+{"revenue_id":"PGL-20261103-app1-p1","ad_network":"pangle","stat_date":"2026-11-03","amount_fen":123456,"gross_amount_fen":137173,"fee_fen":13717,"app_id":"app1","placement_id":"p1","settlement_status":"estimated","evidence_ref":"pangle-batch-mock-1103"},
+{"revenue_id":"PGL-20261102-app1-p1","ad_network":"pangle","stat_date":"2026-11-02","amount_fen":118000,"gross_amount_fen":null,"fee_fen":null,"app_id":"app1","placement_id":"p1","settlement_status":"settled","evidence_ref":"pangle-batch-mock-1102"},
+{"revenue_id":"YLH-20261103-app2-u9","ad_network":"ylh","stat_date":"2026-11-03","amount_fen":45678,"app_id":"app2","ad_unit_id":"u9","settlement_status":"estimated","evidence_ref":"ylh-batch-mock-1103"}
+]
