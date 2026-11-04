@@ -60,6 +60,7 @@ python3 -m unittest discover -s tests -t . -v
 
 - Base URL：`http://127.0.0.1:8787/api/v1`。端点 `health` `recharges` `recharges/summary` `revenues`（明细）`revenues/overview` `revenues/overview/cards` `settlements` `reconcile/summaries` `costs` `snapshots`
 - 总览默认按广告网络汇总 GroMore 预估（`revenue` / `api_revenue`），不是产品/代码位日行。`basis=auto|estimate|settlement`。整月且已有结算单时 auto 改用结算额；`basis=settlement` 缺单返回 `settlement_missing:YYYY-MM`，不填 0。结算单手工写入 `$FIN_DATA_DIR/settlements.json`（非 secrets）。正式入账触发是结算单**完成签订** → `settled`；`paid` 只表示收款。
+- GroMore 日缓存：键是 `(PANGLE_USER_ID, PANGLE_ROLE_ID, 上海自然日)`，只存映射后的金额行，不含 secure key 或 sign。昨日 TTL **90 秒**；更早的日子 **24 小时**。命中后本年 `GET /revenues/overview` 只读缓存（温路径通常远小于 1 秒，目标 p95 < 3 秒）。设了 `FIN_DATA_DIR` 时写 `$FIN_DATA_DIR/gromore-daily.json`（与结算单同目录，不是 secrets），进程重启后仍可命中。凭证写入或删除会清这份缓存。`/revenues/overview/cards` 在区间里每一天都已有缓存（含过期）时立刻返回，并在后台刷新；没有缓存时只等卡片自己的短区间（上限 8 秒），不等整年拉完。冷的本年请求按最多 6 路并行拉 30 日分片，同步等待上限 20 秒；到点返回 `gromore_fetch_failed`（合计留空，不当成更短的总额），也不再补拉全年穿山甲。
 - 鉴权：`Authorization: Bearer $FIN_API_TOKEN`。未设 env → 开发放行并回 `X-Auth-Mode: open-dev`。错或缺少 token → 401 `40101`
 - CORS：`FIN_CORS_ORIGINS`（逗号分隔，默认 `*`，上线前收紧）
 - 充值：只读 Omni billHis JSONL（自动搜 `../**/billHis-1001108443-*.jsonl`，或 `FIN_RECHARGE_JSONL`）
