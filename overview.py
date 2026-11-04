@@ -17,13 +17,14 @@ from decimal import Decimal, ROUND_HALF_UP
 from adapters.base import CredentialMissingError
 from adapters.gromore import DEFAULT_MAX_WAIT, GroMoreFetchError, GroMoreTimeout, OVERVIEW_NETWORKS
 
-# 本年大约 11 个 30 日分片。并行后冷启动应落在这个等待里；到点返回失败标志，不接着打穿山甲全年。
+# 本年大约 11 个 30 日分片。limit=500 后冷启动大约 5 秒，落在这个等待里。
+# 到点或分片失败时，若已有日缓存，总览用已缓存日合计，并打 gromore_partial，不把全年打成 null。
 OVERVIEW_FETCH_WAIT = DEFAULT_MAX_WAIT
 # 卡片只盖昨日到上月，不能被未缓存的本年请求拖住。有日缓存（含过期）则马上返回。
 CARDS_FETCH_WAIT = 8.0
 
 ORDER = {n: i for i, n in enumerate(OVERVIEW_NETWORKS)}
-_HARD = ("credential_missing", "gromore_fetch_failed", "network_unmapped", "settlement_missing",
+_HARD = ("credential_missing", "gromore_fetch_failed", "gromore_partial", "network_unmapped", "settlement_missing",
          "fallback_rt_income", "today_excluded")
 
 
@@ -139,11 +140,15 @@ def fetch_estimate(gromore, start: str, end: str, live_items, *, max_wait: float
     """拉预估。失败或无凭证时改加总已有 live rt/income 穿山甲行（不含 mock）。
 
     等待超时，或区间长于 70 天的上游失败，不再补拉穿山甲：那一次补拉本身就会把本年请求挂住。
+    客户端若带回已缓存日（gromore_partial），用这些行做合计，不改成 null。
     """
     if start > end:
         return [], None, []
     try:
-        rows, _gaps = _fetch_gromore(gromore, start, end, max_wait=max_wait, stale_ok=stale_ok)
+        rows, gaps = _fetch_gromore(gromore, start, end, max_wait=max_wait, stale_ok=stale_ok)
+        kept = [g for g in gaps if g.startswith("gromore_")]
+        if kept:
+            return rows, "gromore_daily", sorted(set(kept))
         return rows, "gromore_daily", []
     except GroMoreTimeout:
         return [], None, ["gromore_fetch_failed"]
