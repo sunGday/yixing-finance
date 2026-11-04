@@ -22,7 +22,26 @@ export function resolveApiBase(): string {
 
 export const API_BASE = resolveApiBase();
 
-type Envelope<T> = { code: number; msg?: string; request_id?: string; data: T };
+type Envelope<T> = { code?: number; msg?: string; request_id?: string; data?: T };
+
+function gapFlagsOf(data: unknown): string[] | undefined {
+  if (!data || typeof data !== "object") return undefined;
+  const raw = (data as { gap_flags?: unknown }).gap_flags;
+  if (!Array.isArray(raw)) return undefined;
+  const flags = raw.filter((item): item is string => typeof item === "string");
+  return flags.length ? flags : undefined;
+}
+
+function fail(path: string, res: Response, body: Envelope<unknown>): never {
+  const code = typeof body.code === "number" ? body.code : undefined;
+  throw new LoadError(
+    path,
+    `code=${code ?? res.status} ${body.msg ?? ""}`.trim(),
+    typeof body.request_id === "string" ? body.request_id : undefined,
+    code,
+    gapFlagsOf(body.data),
+  );
+}
 
 export async function apiList<T>(path: string, params: Record<string, string | undefined>): Promise<T[]> {
   const base = resolveApiBase();
@@ -36,8 +55,33 @@ export async function apiList<T>(path: string, params: Record<string, string | u
     throw new LoadError(path, `网络错误：${String(e)}`);
   }
   let body: Envelope<{ items: T[] } | T[]>;
-  try { body = await res.json(); } catch { throw new LoadError(path, `HTTP ${res.status}：非 JSON 响应`); }
-  if (!res.ok || body.code !== 0) throw new LoadError(path, `code=${body.code ?? res.status} ${body.msg ?? ""}`.trim(), body.request_id);
+  try { body = await res.json(); } catch { throw new LoadError(path, `HTTP ${res.status}：非 JSON 响应`, undefined, res.status); }
+  if (!res.ok || body.code !== 0) fail(path, res, body);
   const d = body.data;
   return Array.isArray(d) ? d : d?.items ?? [];
+}
+
+/** Envelope call for non-list routes. Does not log the body. */
+export async function apiSend<T>(path: string, init?: { method?: string; body?: unknown; cache?: RequestCache }): Promise<T> {
+  const base = resolveApiBase();
+  const method = (init?.method ?? "GET").toUpperCase();
+  const headers = new Headers();
+  headers.set("cache-control", "no-store");
+  if (init?.body !== undefined) headers.set("content-type", "application/json");
+  let res: Response;
+  try {
+    res = await fetch(`${base}${path}`, {
+      method,
+      cache: "no-store",
+      headers,
+      body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
+    });
+  } catch (e) {
+    throw new LoadError(path, `网络错误：${String(e)}`);
+  }
+  if (res.status === 204) return undefined as T;
+  let body: Envelope<T>;
+  try { body = await res.json(); } catch { throw new LoadError(path, `HTTP ${res.status}：非 JSON 响应`, undefined, res.status); }
+  if (!res.ok || body.code !== 0) fail(path, res, body);
+  return body.data as T;
 }

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Coins, LayoutDashboard, Scale, Wallet } from "lucide-react";
+import { Coins, KeyRound, LayoutDashboard, Scale, Wallet } from "lucide-react";
 import { AGENCY_OWNER_ID } from "@/lib/types";
 import { keptHref, useQueryString } from "@/lib/url-state";
 import { cn } from "@/lib/utils";
@@ -14,6 +14,8 @@ const NAV = [
   { href: "/revenues", label: "收入流水", short: "收入", icon: Coins },
   { href: "/reconcile", label: "对账汇总", short: "对账", icon: Scale },
 ];
+
+const CRED = { href: "/settings/credentials", label: "渠道凭证", short: "凭证", icon: KeyRound };
 
 function norm(p: string) {
   if (p.length > 1 && p.endsWith("/")) return p.slice(0, -1);
@@ -46,6 +48,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           ))}
           <span className="flex items-center px-2.5 h-9 text-sm text-white/35">报表（二期）</span>
         </nav>
+        <div className="px-3 pt-4 pb-1 text-[11px] tracking-wide text-white/40">本机</div>
+        <nav className="px-2" aria-label="凭证">
+          <Link href={CRED.href} aria-current={active(CRED.href) ? "page" : undefined}
+            className={cn("flex items-center gap-2 rounded-md px-2.5 h-9 text-sm text-white/75 hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand",
+              active(CRED.href) && "bg-brand/20 text-white font-medium shadow-[inset_2px_0_0_#60a5fa]")}>
+            <CRED.icon className="size-4 shrink-0" />{CRED.label}
+          </Link>
+        </nav>
         <div className="mt-auto p-3 border-t border-white/10 flex flex-col gap-2">
           <div className="text-[11px] leading-relaxed text-white/50">
             代理商锁定<br />
@@ -57,8 +67,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className="flex min-w-0 flex-1 flex-col">
         <main id="content" className="flex-1 min-w-0 pb-[calc(3.75rem+env(safe-area-inset-bottom))] md:pb-0">{children}</main>
       </div>
-      <nav className="md:hidden fixed bottom-0 inset-x-0 z-30 grid grid-cols-4 border-t bg-surface/95 backdrop-blur pb-[env(safe-area-inset-bottom)]" aria-label="主导航">
-        {NAV.map(({ href, short, icon: I }) => (
+      <nav className="md:hidden fixed bottom-0 inset-x-0 z-30 grid grid-cols-5 border-t bg-surface/95 backdrop-blur pb-[env(safe-area-inset-bottom)]" aria-label="主导航">
+        {[...NAV, CRED].map(({ href, short, icon: I }) => (
           <Link key={href} href={keptHref(href, search)} aria-current={active(href) ? "page" : undefined}
             className={cn("flex flex-col items-center justify-center h-14 text-[11px] gap-0.5", active(href) ? "text-brand font-medium" : "text-muted-foreground")}>
             <I className="size-5" />{short}
