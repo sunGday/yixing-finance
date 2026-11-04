@@ -86,9 +86,11 @@ class RevenueAdapter:
     env_keys: tuple[str, ...] = ()
     env_alias_prefixes: tuple[str, ...] = ()  # e.g. GDT_ for ylh
 
+    live_supported = False
+
     def __init__(self, env: dict | None = None, dry_run: bool = True):
         self.env = dict(os.environ if env is None else env)
-        self.dry_run = dry_run  # 骨架期强制 True：只拼请求不发 HTTP
+        self.dry_run = dry_run  # 默认不发 HTTP；live 调用方显式 dry_run=False
 
     def _get(self, key: str):
         v = self.env.get(key)

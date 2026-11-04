@@ -165,11 +165,63 @@ class CredT(_EnvBase):
         self.assertFalse(os.path.exists(os.path.join(os.environ["FIN_SECRETS_DIR"], "revenue-credentials.json")))
 
     def test_cred_clears_revenue_gap(self):
+        """穿山甲凭证在、优量汇缺失：200 + live 行，不再 live_fetch_unverified:pangle。"""
+        from unittest.mock import patch
         self._put("pangle", FAKE_PANGLE)
-        d = self.c.get("/api/v1/revenues").json()["data"]
-        self.assertNotIn("credential_missing:pangle", d["gap_flags"]); self.assertIn("live_fetch_unverified:pangle", d["gap_flags"])
-        self.assertIn("credential_missing:ylh", d["gap_flags"]); self.assertFalse(d["verified"])
+        day = "2026-11-03"
+        body = {"code": "100", "message": "", "data": {day: [{
+            "date": day, "revenue": "10.00", "show": 100, "click": 1, "ecpm": "2.5",
+            "app_id": 42, "ad_slot_id": 7, "region": "cn"}]}}
+
+        def fake(url, params, headers, timeout):
+            self.assertNotIn("s3cr3t", url)
+            self.assertNotIn("s3cr3t-FAKE-pangle-zz", json.dumps(params))
+            self.assertEqual(params.get("date"), day)
+            return body
+
+        with patch("adapters.pangle.http_get", fake):
+            r = self.c.get("/api/v1/revenues", params={"date": day})
+        self.assertEqual(r.status_code, 200)
+        d = r.json()["data"]
+        self.assertNotIn("credential_missing:pangle", d["gap_flags"])
+        self.assertNotIn("live_fetch_unverified:pangle", d["gap_flags"])
+        self.assertIn("credential_missing:ylh", d["gap_flags"])
+        self.assertFalse(d["verified"])
+        live = [i for i in d["items"] if i["ad_network"] == "pangle" and i.get("source") == "live"]
+        self.assertEqual([(i["amount_fen"], i["placement_id"], i["country"]) for i in live], [(1000, "7", "CN")])
         self.assertNotIn("s3cr3t", json.dumps(d))
+
+    def test_pangle_partial_strict_not_503(self):
+        from unittest.mock import patch
+        self._put("pangle", FAKE_PANGLE)
+        day = "2026-11-03"
+        body = {"code": 100, "data": {day: [{"date": day, "revenue": 1, "show": 1, "click": 0, "app_id": 1, "ad_slot_id": 2}]}}
+
+        def fake(url, params, headers, timeout):
+            return body
+
+        with patch("adapters.pangle.http_get", fake):
+            r = self.c.get("/api/v1/revenues", params={"date": day, "strict": "true"})
+        self.assertEqual((r.status_code, r.json()["code"]), (200, 0))
+        d = r.json()["data"]
+        self.assertIn("credential_missing:ylh", d["gap_flags"])
+        self.assertTrue(any(i["ad_network"] == "pangle" and i["source"] == "live" and i["amount_fen"] == 100 for i in d["items"]))
+        self.assertFalse(any(i["ad_network"] == "ylh" for i in d["items"]))
+        os.environ["FIN_REVENUE_MOCK"] = "0"
+        with patch("adapters.pangle.http_get", fake):
+            r = self.c.get("/api/v1/revenues", params={"date": day})
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("credential_missing:ylh", r.json()["data"]["gap_flags"])
+        # 只问优量汇且没有凭证：仍 503
+        self.assertEqual(self.c.get("/api/v1/revenues", params={"ad_network": "ylh", "strict": "true"}).status_code, 503)
+        # 上游失败也不要因为缺优量汇而整页 503
+        from adapters.pangle import IncomeFetchError
+        with patch("adapters.pangle.http_get", side_effect=IncomeFetchError("bad sign")):
+            r = self.c.get("/api/v1/revenues", params={"date": day, "strict": "true"})
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("live_fetch_error:pangle", r.json()["data"]["gap_flags"])
+        self.assertIn("credential_missing:ylh", r.json()["data"]["gap_flags"])
+        self.assertNotIn("s3cr3t", r.text)
 
     def test_cred_reload_and_env_wins(self):
         self._put("pangle", FAKE_PANGLE)

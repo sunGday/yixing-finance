@@ -35,6 +35,9 @@ class T(unittest.TestCase):
     def test_dry_run_build(self):
         req = get_adapter("pangle", env={"PANGLE_USER_ID": "u", "PANGLE_ROLE_ID": "r", "PANGLE_SECURE_KEY": "k"}).build_request("2026-11-03")
         self.assertTrue(req["dry_run"]); self.assertFalse(req["verified"]); self.assertEqual(len(req["params"]["sign"]), 32)
+        self.assertEqual(req["url"], "https://open-api.csjplatform.com/union_media/open_api/rt/income")
+        self.assertEqual(req["params"]["region"], "cn")
+        self.assertNotIn("k", req["params"].values())
         req = get_adapter("ylh", env={"GDT_MEMBER_ID": "m", "GDT_SECRET": "s"}).build_request("2026-11-03", ts=1)
         self.assertTrue(req["dry_run"])
         with self.assertRaises(NotImplementedError):

@@ -39,5 +39,20 @@ curl -XPUT   $B/credentials/pangle -H 'Content-Type: application/json' -d '{"fie
 curl -XPATCH $B/credentials/ylh    -H 'Content-Type: application/json' -d '{"fields":{"YLH_SECRET":""}}'   # 空串=清除
 curl -XDELETE $B/credentials/pangle
 ```
-- 凭证齐全后 `/revenues` 去掉 `credential_missing:*`，但仍为 `live_fetch_unverified:*`（endpoint/签名待复核，未开真 HTTP）→ **收入仍不关账**。
+- 穿山甲凭证齐全后 `GET /revenues` **真拉**预估收入（`source:"live"`，`amount_fen` 为分）。不再出现 `live_fetch_unverified:pangle`。优量汇未接真拉：缺凭证仍是 `credential_missing:ylh`，**不要**因此把整页打成 503。只请求优量汇且无凭证、或两个网络都无凭证，且 `strict=true` / `FIN_REVENUE_MOCK=0` 时才 503 `50301`。收入仍是 estimated，不关账。
+- 核对（密钥已在 credentials 文件里，不要把值写进命令历史以外的地方，更不要提交）：
+```
+B=http://127.0.0.1:8787/api/v1
+# 脱敏：hint 形如 1***25，响应里没有 Secure Key
+curl -sS "$B/credentials/pangle"
+# 选一个 CSJ 里有收入、且早于今天（上海）的日期
+curl -sS "$B/revenues?date=YYYY-MM-DD"
+# 期望 HTTP 200、code=0、至少一条 ad_network=pangle source=live 的行；
+# gap_flags 不含 live_fetch_unverified:pangle；若未配优量汇则含 credential_missing:ylh
+```
+  同一天可用官方 CLI 对照（env 与文件字段对应：`CSJ_MEDIA_ID`=`PANGLE_USER_ID`，`CSJ_ROLE_ID`=`PANGLE_ROLE_ID`，`CSJ_SECURITY_KEY`=`PANGLE_SECURE_KEY`）：
+```
+csj-cli report income --date YYYY-MM-DD --region cn
+```
+  单测不打外网：`python3 -m unittest tests.test_pangle_income tests.test_api -v`（HTTP 已 mock）。
 - ECS：`sudo install -d -m 700 -o <api运行用户> /var/lib/yixing-finance/secrets`；docker 挂 `/var/lib/yixing-finance/secrets:/data/secrets` + `FIN_SECRETS_DIR=/data/secrets`；systemd(www-data) 则 `chown www-data` 该目录。备份时按密钥对待。

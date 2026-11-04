@@ -50,7 +50,7 @@ cd web && npm i && npm run dev
 
 ## API（FastAPI · v0.3）
 
-不启投、不写 Omni、不发穿山甲/优量汇真实 HTTP。密钥不入库。草案见 `API-DRAFT.md`。代码：`main.py`、`api/routes.py`、`adapters/`、`sources/omni_billhis.py`、`reconcile.py`。
+不启投、不写 Omni。穿山甲在凭证齐全时只读拉取预估收入；优量汇仍不发真实 HTTP。密钥不入库。草案见 `API-DRAFT.md`。代码：`main.py`、`api/routes.py`、`adapters/`、`sources/omni_billhis.py`、`reconcile.py`。
 
 ```bash
 pip install -r requirements.txt
@@ -62,7 +62,7 @@ python3 -m unittest discover -s tests -t . -v
 - 鉴权：`Authorization: Bearer $FIN_API_TOKEN`。未设 env → 开发放行并回 `X-Auth-Mode: open-dev`。错或缺少 token → 401 `40101`
 - CORS：`FIN_CORS_ORIGINS`（逗号分隔，默认 `*`，上线前收紧）
 - 充值：只读 Omni billHis JSONL（自动搜 `../**/billHis-1001108443-*.jsonl`，或 `FIN_RECHARGE_JSONL`）
-- 收入：无 `PANGLE_*` / `YLH_*` → `source:"mock"` + `gap_flags: credential_missing:*`。`?strict=true` 或 `FIN_REVENUE_MOCK=0` → 503 `50301`。mock 不进对账
+- 收入：无 `PANGLE_*` / `YLH_*` → `source:"mock"` + `gap_flags: credential_missing:*`。穿山甲凭证齐全 → 真拉 CSJ `rt/income`（上海时区，金额分，`source:"live"`）。优量汇仍是骨架。只缺优量汇时整页仍 200，`gap_flags` 保留 `credential_missing:ylh`，不再因穿山甲未复核而 503。`?strict=true` 或 `FIN_REVENUE_MOCK=0` 仅当**所请求的每个网络都缺凭证**时 503 `50301`。mock 不进对账
 - 概览和充值页在真数据下仍用 fixtures 画消耗与余额快照（这两个接口是空 stub）
 
 ## 已锁定口径
@@ -74,4 +74,4 @@ python3 -m unittest discover -s tests -t . -v
 
 `FIN_API_TOKEN`；`PANGLE_USER_ID` `PANGLE_ROLE_ID` `PANGLE_SECURE_KEY`；`YLH_MEMBER_ID` `YLH_SECRET`（别名 `GDT_MEMBER_ID` `GDT_SECRET`）；Omni 沿用既有 `oppo-omniapi` 配置。
 
-穿山甲/优量汇 endpoint 与签名算法仍是待复核占位。
+穿山甲收入：`GET https://open-api.csjplatform.com/union_media/open_api/rt/income`（`report income` 同路径）。env 名同上，别名 `CSJ_MEDIA_ID` `CSJ_ROLE_ID` `CSJ_SECURITY_KEY`。优量汇 endpoint 仍是待复核占位。核对步骤见 `OPS.md`。
