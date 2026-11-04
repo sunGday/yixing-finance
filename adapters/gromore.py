@@ -13,7 +13,8 @@ Allen 2026-11-03 实测 `csj-cli report gromore-daily`
 未知编码不猜测，调用方打 `network_unmapped:<code>`。
 签名复用穿山甲适配器（排序 k=v 后拼接 security key 再 MD5）。
 凭证即 PANGLE_*，不单独注册渠道（避免 credentials schema 多出一个 channel）。
-单次请求跨度 ≤30 天（含首尾），更长区间分片。不在 import 时发 HTTP。
+单次请求跨度 ≤30 天（含首尾），更长区间分片。分页 limit 默认 500：
+上游忽略 offset，30 天 × 4 网络（120 行）必须落在一页里。不在 import 时发 HTTP。
 
 日缓存按 (user_id, role_id, 上海自然日) 记已映射的行，不写 secure key。
 早于昨日的日子默认留 24 小时，昨日及更新的日子 90 秒；失败不写入。
@@ -34,6 +35,9 @@ from adapters.pangle import PangleAdapter
 PATH = "/union_media/open/api/mediation/get_daily_income_report_data"
 DEFAULT_BASE = "https://www.csjplatform.com"
 MAX_SPAN_DAYS = 30
+# 穿山甲忽略 offset，第二页会原样再返回第一页。30 天 × 4 网络 = 120 行，
+# limit=100 必然翻页然后 pagination stalled，整段预估失败。500 让一个分片一页装下。
+DEFAULT_PAGE_LIMIT = 500
 # Allen verified 2026-11-03. Do not extend from the upload-API ADN table (code 9 ≠ gm_adx).
 NETWORK_CODES = {"1": "pangle", "3": "ylh", "7": "kuaishou", "10": "gm_adx"}
 OVERVIEW_NETWORKS = ("pangle", "ylh", "kuaishou", "gm_adx")
@@ -222,7 +226,7 @@ def _safe_row(row: dict) -> dict | None:
 
 
 class GroMoreClient:
-    def __init__(self, env: dict | None = None, getter=None, limit: int = 100, base: str | None = None,
+    def __init__(self, env: dict | None = None, getter=None, limit: int = DEFAULT_PAGE_LIMIT, base: str | None = None,
                  cache_ttl: float = RECENT_TTL, closed_ttl: float = CLOSED_TTL, clock=None, today=None):
         self._env = env
         self._getter = getter or _default_get
@@ -285,7 +289,8 @@ class GroMoreClient:
               stale_ok: bool = False) -> tuple[list[dict], list[str]]:
         """返回 (rows, gap_flags)。rows 为已映射的 date×network 分。无凭证抛 CredentialMissingError。
 
-        max_wait：本次同步等待上限（秒）。到点仍缺日则抛 GroMoreTimeout，已完成的分片留在缓存里。
+        max_wait：本次同步等待上限（秒）。到点仍缺日，且区间里没有任何日缓存，才抛 GroMoreTimeout。
+        已完成的分片留在缓存里；只要有一天，就返回这些行并带 gromore_partial，不把整段变成空。
         stale_ok：区间里每一天都有过缓存（含过期）时立刻返回，缺的新鲜日放到后台刷新。
         """
         creds = PangleAdapter(env=self._environ()).credentials()
@@ -304,12 +309,24 @@ class GroMoreClient:
                 self._refresh_async(url, creds, ns, missing, gen)
             return self._read_span(ns, start, end, allow_stale=True)
         shards = self._missing_shards(ns, start, end)
+        failure = None
         if shards:
-            self._run_shards(url, creds, ns, start, end, shards, gen, max_wait)
+            try:
+                self._run_shards(url, creds, ns, start, end, shards, gen, max_wait)
+            except GroMoreFetchError as exc:
+                failure = exc
         if self._covered(ns, start, end, allow_stale=False):
             return self._read_span(ns, start, end, allow_stale=False)
         if stale_ok and self._covered(ns, start, end, allow_stale=True):
             return self._read_span(ns, start, end, allow_stale=True)
+        if self._has_cached(ns, start, end):
+            rows, gaps = self._read_span(ns, start, end, allow_stale=True)
+            missing = self._missing_shards(ns, start, end)
+            if missing:
+                self._refresh_async(url, creds, ns, missing, gen)
+            return rows, sorted(set(gaps) | {"gromore_partial", "gromore_fetch_failed"})
+        if failure is not None and not isinstance(failure, GroMoreTimeout):
+            raise failure
         raise GroMoreTimeout("deadline")
 
     def _fetch_uncached(self, url, creds, start: str, end: str) -> tuple[list[dict], list[str]]:
@@ -338,6 +355,17 @@ class GroMoreClient:
 
     def _fresh(self, hit, iso: str, now: float, today: dt.date) -> bool:
         return bool(hit) and now - hit[0] < self._ttl_for(iso, today)
+
+    def _has_cached(self, ns: tuple, start: str, end: str) -> bool:
+        with self._lock:
+            bucket = self._days.get(ns, {})
+            day = dt.date.fromisoformat(start)
+            last = dt.date.fromisoformat(end)
+            while day <= last:
+                if day.isoformat() in bucket:
+                    return True
+                day += dt.timedelta(days=1)
+        return False
 
     def _covered(self, ns: tuple, start: str, end: str, *, allow_stale: bool) -> bool:
         now = self._clock()
@@ -638,7 +666,8 @@ class GroMoreClient:
                 break
             first = (str(page[0].get("date") or page[0].get("stat_date") or ""), str(page[0].get("network") or ""))
             if seen_first == first and offset:
-                raise GroMoreFetchError("pagination stalled")
+                # offset 被忽略时下一页与上一页相同，再翻也没有新行。停在已拿到的页，避免整段失败。
+                break
             seen_first = first
             for raw in page:
                 mapped = map_raw_row(raw)

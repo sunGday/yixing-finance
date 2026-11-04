@@ -11,7 +11,9 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from fastapi.testclient import TestClient
-from adapters.gromore import GroMoreClient, GroMoreFetchError, GroMoreTimeout, iter_shards, map_network
+from adapters.gromore import (
+    DEFAULT_PAGE_LIMIT, GroMoreClient, GroMoreFetchError, GroMoreTimeout, iter_shards, map_network,
+)
 from adapters.pangle import PangleAdapter
 import store as st
 from main import create_app
@@ -260,7 +262,10 @@ class OverviewT(unittest.TestCase):
         self.assertEqual(self.c.patch(f"/api/v1/settlements/{sid}", json={"settlement_status": "settled"}).json()["code"], 40901)
 
     def test_cards_and_detail_flags(self):
-        d = self.c.get("/api/v1/revenues/overview/cards").json()["data"]
+        listed = self.c.get("/api/v1/revenues/overview/cards", params={"basis": "auto"})
+        self.assertEqual(listed.status_code, 200, listed.text)
+        d = listed.json()["data"]
+        self.assertEqual(d["basis"], "auto")
         self.assertEqual(d["today"], "2026-11-04")
         cards = {c["key"]: c for c in d["cards"]}
         self.assertEqual(cards["yesterday"]["total_fen"], 1340359)
@@ -511,6 +516,71 @@ class CacheBoundT(unittest.TestCase):
         self.assertIsNone(body["total_fen"])
         self.assertNotEqual(body["total_fen"], 0)
 
+    def test_timeout_sums_cached_days_instead_of_null(self):
+        phase = {"block": False}
+        release = threading.Event()
+
+        def getter(url, params):
+            if phase["block"] and not release.wait(5):
+                raise GroMoreFetchError("http error")
+            return _page(params)
+
+        client = GroMoreClient(env=FAKE, getter=getter, today=dt.date(2026, 11, 4))
+        warm = load_overview(
+            "2026-11-03", "2026-11-03", "auto", today=dt.date(2026, 11, 4),
+            settlement_items=[], gromore=client, live_items=None)
+        self.assertEqual(warm["total_fen"], 1340359)
+        self.assertTrue(warm["verified"])
+        phase["block"] = True
+        started = time.perf_counter()
+        try:
+            body = load_overview(
+                "2026-01-01", "2026-11-03", "auto", today=dt.date(2026, 11, 4),
+                settlement_items=[], gromore=client, live_items=None, max_wait=0.3)
+            self.assertLess(time.perf_counter() - started, 2.0)
+            self.assertEqual(body["total_fen"], 1340359)
+            self.assertIsNotNone(body["total_fen"])
+            self.assertIn("gromore_partial", body["gap_flags"])
+            self.assertIn("gromore_fetch_failed", body["gap_flags"])
+            self.assertFalse(any(flag.startswith("fallback_rt_income") for flag in body["gap_flags"]))
+            self.assertFalse(body["verified"])
+            again_at = time.perf_counter()
+            again = load_overview(
+                "2026-01-01", "2026-11-03", "auto", today=dt.date(2026, 11, 4),
+                settlement_items=[], gromore=client, live_items=None, max_wait=0.3)
+            self.assertLess(time.perf_counter() - again_at, 3.0)
+            self.assertEqual(again["total_fen"], 1340359)
+            day = load_overview(
+                "2026-11-03", "2026-11-03", "auto", today=dt.date(2026, 11, 4),
+                settlement_items=[], gromore=client, live_items=None, max_wait=0.3)
+            self.assertEqual(day["total_fen"], 1340359)
+            self.assertEqual(day["source"], "gromore_daily")
+            self.assertTrue(day["verified"])
+        finally:
+            release.set()
+
+    def test_failed_shard_keeps_rows_already_fetched(self):
+        def getter(url, params):
+            if params["start_date"] < "2026-10-28":
+                raise GroMoreFetchError("http error")
+            return _page(params)
+
+        client = GroMoreClient(env=FAKE, getter=getter, today=dt.date(2026, 11, 4))
+        body = load_overview(
+            "2026-01-01", "2026-11-03", "auto", today=dt.date(2026, 11, 4),
+            settlement_items=[], gromore=client, live_items=None, max_wait=2)
+        self.assertIn("gromore_partial", body["gap_flags"])
+        self.assertIn("gromore_fetch_failed", body["gap_flags"])
+        self.assertFalse(any(flag.startswith("fallback_rt_income") for flag in body["gap_flags"]))
+        self.assertEqual(body["total_fen"], 200 + 100 + 1340359)
+        self.assertIsNotNone(body["total_fen"])
+        self.assertFalse(body["verified"])
+        day = load_overview(
+            "2026-11-03", "2026-11-03", "auto", today=dt.date(2026, 11, 4),
+            settlement_items=[], gromore=client, live_items=[])
+        self.assertEqual(day["total_fen"], 1340359)
+        self.assertTrue(day["verified"])
+
     def test_cards_do_not_wait_on_a_blocked_year_shard(self):
         release = threading.Event()
         blocked = threading.Event()
@@ -600,6 +670,88 @@ class CacheBoundT(unittest.TestCase):
             self.assertGreater(len(calls), cut)
         finally:
             tmp.cleanup()
+
+
+def _network_rows(start: str, end: str) -> list[dict]:
+    """每天四网一行。30 天分片 = 120 行，limit=100 时必须翻页。"""
+    rows = []
+    day = dt.date.fromisoformat(start)
+    last = dt.date.fromisoformat(end)
+    while day <= last:
+        iso = day.isoformat()
+        for code, rev in ((1, "1.00"), (3, "2.00"), (7, "3.00"), (10, "4.00")):
+            rows.append({"date": iso, "network": code, "revenue": rev})
+        day += dt.timedelta(days=1)
+    return rows
+
+
+def _ignore_offset(rows):
+    """上游不看 offset，每次都返回该区间的第一页。"""
+    calls = []
+
+    def getter(url, params):
+        calls.append((params["offset"], params["limit"], params["start_date"], params["end_date"]))
+        start, end = params["start_date"], params["end_date"]
+        chunk = [r for r in rows if start <= r["date"] <= end]
+        return {"code": "100", "data": {"total": len(chunk), "report_list": chunk[:int(params["limit"])]}}
+
+    return getter, calls
+
+
+class PageLimitT(unittest.TestCase):
+    def test_default_limit_fits_a_30_day_shard_when_offset_is_ignored(self):
+        rows = _network_rows("2026-09-01", "2026-09-30")
+        self.assertEqual(len(rows), 120)
+        getter, calls = _ignore_offset(rows)
+        client = GroMoreClient(env=FAKE, getter=getter, cache_ttl=0)
+        self.assertEqual(client.limit, DEFAULT_PAGE_LIMIT)
+        self.assertEqual(client.limit, 500)
+        got, _gaps = client.fetch("2026-09-01", "2026-09-30")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "0")
+        self.assertEqual(calls[0][1], "500")
+        self.assertEqual(len(got), 120)
+        self.assertEqual({r["stat_date"] for r in got}, {r["date"] for r in rows})
+        self.assertEqual(sum(r["amount_fen"] for r in got), 30 * 1000)
+
+    def test_year_of_shards_completes_in_one_page_each(self):
+        rows = _network_rows("2026-01-01", "2026-11-03")
+        self.assertEqual(len(rows), 1228)
+        getter, calls = _ignore_offset(rows)
+        client = GroMoreClient(env=FAKE, getter=getter, cache_ttl=0)
+        got, _gaps = client.fetch("2026-01-01", "2026-11-03")
+        shards = list(iter_shards("2026-01-01", "2026-11-03"))
+        self.assertEqual(len(calls), len(shards))
+        self.assertTrue(all(limit == "500" and offset == "0" for offset, limit, _s, _e in calls))
+        self.assertEqual(len(got), 1228)
+        self.assertEqual(len({r["stat_date"] for r in got}), 307)
+
+    def test_ignored_offset_stops_instead_of_raising(self):
+        rows = _network_rows("2026-09-01", "2026-09-30")
+        getter, calls = _ignore_offset(rows)
+        client = GroMoreClient(env=FAKE, getter=getter, limit=100, cache_ttl=0)
+        got, _gaps = client.fetch("2026-09-01", "2026-09-30")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual([c[0] for c in calls], ["0", "100"])
+        self.assertEqual(len(got), 100)
+        self.assertEqual(len({(r["stat_date"], r["code"]) for r in got}), 100)
+
+    def test_honored_offset_still_returns_the_full_shard(self):
+        rows = _network_rows("2026-09-01", "2026-09-30")
+        calls = []
+
+        def getter(url, params):
+            calls.append(params["offset"])
+            off, lim = int(params["offset"]), int(params["limit"])
+            start, end = params["start_date"], params["end_date"]
+            chunk = [r for r in rows if start <= r["date"] <= end]
+            return {"code": "100", "data": {"total": len(chunk), "report_list": chunk[off:off + lim]}}
+
+        client = GroMoreClient(env=FAKE, getter=getter, limit=100, cache_ttl=0)
+        got, _gaps = client.fetch("2026-09-01", "2026-09-30")
+        self.assertEqual(calls, ["0", "100"])
+        self.assertEqual(len(got), 120)
+        self.assertEqual(sum(r["amount_fen"] for r in got), 30 * 1000)
 
 
 if __name__ == "__main__":
