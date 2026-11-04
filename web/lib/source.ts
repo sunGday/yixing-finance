@@ -1,6 +1,7 @@
 /**
  * Pages（NEXT_PUBLIC_FINANCE_MODE=fixtures）只用样例。
- * next dev / next start 默认 MODE=live，浏览器请求 /api/v1（rewrite → 127.0.0.1:8787）。
+ * next dev / next start 默认 MODE=live，浏览器请求同源 /api/v1。
+ * 生产由 Route Handler 转发到财务 API，并在服务端带上 Bearer。
  * ?mock=1 强制样例，?mock=error 强制错误态。
  */
 export function wantsLive(mock?: string) {
@@ -20,6 +21,6 @@ export function sourceLabel(mock: string | undefined, mixed = false) {
 export function sourceTitle(mock: string | undefined, mixed = false) {
   if (mock === "error") return "数据来源：?mock=error，不请求接口";
   if (!wantsLive(mock)) return "数据来源：fixtures 演示。GitHub Pages 与 ?mock=1 走这条路径，到不了 8787";
-  if (mixed) return "数据来源：充值/收入/对账走 /api/v1 → 127.0.0.1:8787。消耗与余额快照接口是空 stub，这两块仍用样例";
-  return "数据来源：真数据，浏览器 /api/v1 → 127.0.0.1:8787";
+  if (mixed) return "数据来源：充值/收入/对账走同源 /api/v1（服务端转发）。消耗与余额快照接口是空 stub，这两块仍用样例";
+  return "数据来源：真数据，浏览器请求同源 /api/v1，由服务端转发";
 }

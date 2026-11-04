@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "build:pages": "STATIC_EXPORT=1 NEXT_PUBLIC_BASE_PATH=/yixing-finance next build",
+    "build:pages": "node scripts/build-pages.mjs",
     "start": "next start",
     "lint": "eslint"
   },

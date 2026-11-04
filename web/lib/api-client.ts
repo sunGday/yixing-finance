@@ -1,7 +1,7 @@
 // mario 10C 客户端。包络 {code,msg,request_id,data}；列表 data={items,page,page_size,total}。
-// 浏览器：NEXT_PUBLIC_FINANCE_API_BASE=/api/v1（next dev rewrite → 8787）。
+// 浏览器：NEXT_PUBLIC_FINANCE_API_BASE=/api/v1。生产由 Route Handler 转发并注入 Bearer。
 // Pages 静态导出不设置该变量，页面走 fixtures，且本模块仅在 live 模式动态导入。
-// FIN_API_TOKEN 仅在 Node 请求时附加；静态页不携带。
+// 本文件不读 FIN_API_TOKEN，也不读 NEXT_PUBLIC_FIN_API_TOKEN（禁止把密钥打进浏览器包）。
 import { LoadError } from "./errors";
 
 function strip(s: string) { return s.replace(/\/+$/, ""); }
@@ -9,11 +9,11 @@ function strip(s: string) { return s.replace(/\/+$/, ""); }
 /** 解析后的请求前缀（无尾斜杠） */
 export function resolveApiBase(): string {
   const pub = strip(process.env.NEXT_PUBLIC_FINANCE_API_BASE ?? "");
-  const internal = strip(process.env.FINANCE_API_INTERNAL_BASE ?? "");
   if (typeof window === "undefined") {
+    const internal = strip(process.env.FINANCE_API_INTERNAL_BASE ?? "");
     if (internal) return internal;
     if (pub.startsWith("http")) return pub;
-    // 相对 /api/v1 → SSR 直打 mario，与 rewrite 目标一致
+    // 相对 /api/v1，且没有 internal base：SSR 打本机 mario。浏览器走同源，由 BFF 转发。
     if (pub.startsWith("/")) return `http://127.0.0.1:8787${pub}`;
     return "http://127.0.0.1:8787/api/v1";
   }
@@ -29,10 +29,9 @@ export async function apiList<T>(path: string, params: Record<string, string | u
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) if (v) qs.set(k, v);
   qs.set("page_size", "500");
-  const token = process.env.FIN_API_TOKEN || process.env.NEXT_PUBLIC_FIN_API_TOKEN;
   let res: Response;
   try {
-    res = await fetch(`${base}${path}?${qs}`, { headers: token ? { Authorization: `Bearer ${token}` } : {}, cache: "no-store" });
+    res = await fetch(`${base}${path}?${qs}`, { cache: "no-store" });
   } catch (e) {
     throw new LoadError(path, `网络错误：${String(e)}`);
   }
