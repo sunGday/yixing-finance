@@ -9,6 +9,7 @@ import {
   LIST_PAGE_CAP, agencyTotal, counterparty, listTotal, normalizeRechargeSummary,
   parentInListRequest, parentMonths, parentSeries, rechargeSummaryRequest, visibleParentRows,
 } from "@/lib/agency-recharge";
+import { forRequestedRange } from "@/lib/pnl";
 import { loadParentBundle, loadRechargeBundle } from "@/lib/fx/recharges";
 import type { Filters } from "@/lib/filters";
 import { formatFen } from "@/lib/format";
@@ -43,8 +44,9 @@ export function RechargesView() {
   const held = useHeldRange(listLive.data, f.from, f.to, liveOn && showAgency);
   const fixture = loadParentBundle(f);
   const raw = listLive.data?.rc as Recharge[] | undefined;
-  const rows = liveOn ? (raw ? visibleParentRows(raw, held.from, held.to, f.q) : undefined) : fixture.rows;
-  const summary = liveOn ? summaryLive.data : fixture.summary;
+  const listReady = !liveOn || (held.from === f.from && held.to === f.to);
+  const rows = liveOn ? (listReady && raw ? visibleParentRows(raw, f.from, f.to, f.q) : undefined) : fixture.rows;
+  const summary = forRequestedRange(liveOn ? summaryLive.data : fixture.summary, f.from, f.to);
   const fields = f.fund === "cost" || f.fund === "snapshot" ? (["subs", "fund", "q"] as const) : (["fund", "q"] as const);
 
   return (
@@ -87,7 +89,7 @@ function Agency({ f, heldFrom, heldTo, summary, rows, summaryError, listError, s
   const fromSummary = !!summary && agencyTotal(summary) != null;
   const series = summary ? parentSeries(summary) : null;
   const months = summary ? parentMonths(summary.items) : [];
-  const waiting = !summary && !rows && (summaryLoading || listLoading);
+  const waiting = !summary && !rows && (summaryLoading || listLoading || refreshing);
   const failed = !summary && !rows && (summaryError || listError);
   return (
     <>

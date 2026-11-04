@@ -109,7 +109,7 @@ export function explainGap(flag: string): string {
   if (flag.startsWith("credential_missing:")) return `${networkLabel(flag.slice("credential_missing:".length))}凭证未配齐`;
   if (flag.startsWith("fallback_rt_income")) return "部分数据：GroMore 不可用，合计只含穿山甲";
   if (flag.startsWith("settlement_missing:")) return `${flag.slice("settlement_missing:".length)} 没有结算单，金额留空，不是 0`;
-  if (flag === "gromore_fetch_failed") return "GroMore 拉取失败";
+  if (flag === "gromore_fetch_failed") return "收入拉取失败";
   if (flag.startsWith("network_unmapped:")) return `未映射广告网络 ${flag.slice("network_unmapped:".length)}，金额计入合计`;
   if (flag.startsWith("today_excluded:")) return `不含今天 ${flag.slice("today_excluded:".length)}`;
   if (flag.startsWith("estimate_settlement_diff:")) return `${flag.slice("estimate_settlement_diff:".length)} 预估与结算差额较大`;

@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useRef } from "react";
 import { FilterBar } from "@/components/fin/filter-bar";
 import { ErrorState, StaleNote, StatusChip } from "@/components/fin/bits";
 import { Banner, Kpi, Money, PageHeader, Panel } from "@/components/fin/ui";
@@ -11,7 +10,7 @@ import { agencyTotal, normalizeRechargeSummary, rechargeSummaryRequest, type Rec
 import { overviewDefaults, type Filters } from "@/lib/filters";
 import { formatFen } from "@/lib/format";
 import { loadOverviewModel } from "@/lib/fx/overview";
-import { clipMonth, incomeBasis, normalizeLiveCosts, profitAndLoss, sliceCostWindow, type CostWindow } from "@/lib/pnl";
+import { clipMonth, forRequestedRange, incomeBasis, normalizeLiveCosts, profitAndLoss, shownCost, sliceCostWindow, type CostWindow } from "@/lib/pnl";
 import { explainGap, networkLabel, normalizeOverview, overviewRequest, type RevenueOverview } from "@/lib/revenue-overview";
 import { wantsLive } from "@/lib/source";
 import { hrefFor, useFilters } from "@/lib/url-state";
@@ -27,27 +26,6 @@ type Trio = {
   summary: RechargeSummary | null;
 };
 
-function sameRange(
-  a: { from: string | null; to: string | null } | null | undefined,
-  b: { from: string | null; to: string | null } | null | undefined,
-) {
-  return !!a && !!b && !!a.from && !!a.to && !!b.from && !!b.to && a.from === b.from && a.to === b.to;
-}
-
-/** 收入和消耗都换成新区间之后才一起换。一边先到，仍显示上一对。 */
-function useStableTrio(overview?: RevenueOverview, costs?: CostWindow, summary?: RechargeSummary): Trio {
-  const held = useRef<Trio | null>(null);
-  if (overview && costs && sameRange(overview, costs)) {
-    const summaryAligned = summary && sameRange(summary, overview)
-      ? summary
-      : held.current?.summary && sameRange(held.current.summary, overview) ? held.current.summary : null;
-    held.current = { overview, costs, summary: summaryAligned };
-    return held.current;
-  }
-  if (held.current) return held.current;
-  return { overview: overview ?? null, costs: costs ?? null, summary: summary ?? null };
-}
-
 export function OverviewView() {
   const f = useFilters(overviewDefaults);
   const liveOn = wantsLive(f.mock);
@@ -58,10 +36,13 @@ export function OverviewView() {
   const overviewLive = useLiveValue(liveOn, ovReq.path, ovReq.params, normalizeOverview);
   const costLive = useLiveValue(liveOn, "/costs", costParams, (raw) => normalizeLiveCosts(raw, f.from, f.to));
   const summaryLive = useLiveValue(liveOn, sumReq.path, sumReq.params, (raw) => normalizeRechargeSummary(raw, f.from, f.to));
-  const liveTrio = useStableTrio(overviewLive.data, costLive.data, summaryLive.data);
-  const trio = liveOn ? liveTrio : { overview: model.overview, costs: model.costs, summary: model.summary };
+  const trio: Trio = {
+    overview: forRequestedRange(liveOn ? overviewLive.data : model.overview, f.from, f.to) ?? null,
+    costs: forRequestedRange(liveOn ? costLive.data : model.costs, f.from, f.to) ?? null,
+    summary: forRequestedRange(liveOn ? summaryLive.data : model.summary, f.from, f.to) ?? null,
+  };
   const refreshing = overviewLive.refreshing || costLive.refreshing || summaryLive.refreshing;
-  const loading = liveOn && !trio.overview && !trio.costs && (overviewLive.loading || costLive.loading);
+  const pending = liveOn && (overviewLive.loading || overviewLive.refreshing || costLive.loading || costLive.refreshing);
   const firstError = overviewLive.error ?? costLive.error ?? summaryLive.error;
 
   return (
@@ -83,10 +64,10 @@ export function OverviewView() {
             {overviewLive.error && trio.overview ? <StaleNote message={overviewLive.error.message} onRetry={overviewLive.retry} /> : null}
             {costLive.error && trio.costs ? <StaleNote message={costLive.error.message} onRetry={costLive.retry} /> : null}
             {summaryLive.error && trio.summary ? <StaleNote message={summaryLive.error.message} onRetry={summaryLive.retry} /> : null}
-            {loading ? <HeroSkeleton /> : !trio.overview && !trio.costs && firstError ? (
+            {!trio.overview && !trio.costs && pending ? <HeroSkeleton /> : !trio.overview && !trio.costs && firstError ? (
               <ErrorState path={firstError.path} message={firstError.message} requestId={firstError.requestId} onRetry={() => { overviewLive.retry(); costLive.retry(); summaryLive.retry(); }} />
             ) : (
-              <Body f={f} trio={trio} overviewError={overviewLive.error} costError={costLive.error} onRetryOverview={overviewLive.retry} onRetryCost={costLive.retry} />
+              <Body f={f} trio={trio} pending={pending} overviewError={overviewLive.error} costError={costLive.error} onRetryOverview={overviewLive.retry} onRetryCost={costLive.retry} />
             )}
           </>
         )}
@@ -103,9 +84,10 @@ function HeroSkeleton() {
   );
 }
 
-function Body({ f, trio, overviewError, costError, onRetryOverview, onRetryCost }: {
+function Body({ f, trio, pending, overviewError, costError, onRetryOverview, onRetryCost }: {
   f: Filters;
   trio: Trio;
+  pending: boolean;
   overviewError?: LiveError;
   costError?: LiveError;
   onRetryOverview: () => void;
@@ -116,13 +98,14 @@ function Body({ f, trio, overviewError, costError, onRetryOverview, onRetryCost 
   const pnl = profitAndLoss(overview, costs);
   const basis = overview ? incomeBasis(overview.by_month, overview.basis) : "—";
   const recharge = summary ? agencyTotal(summary) : null;
-  const aligned = sameRange(overview, costs);
-  const partial = aligned && costs && costs.total_fen == null && costs.partial_fen != null;
+  const costShown = costs ? shownCost(costs) : null;
+  const fetchFailed = overview?.gap_flags.includes("gromore_fetch_failed");
   return (
     <>
-      {overview && overview.gap_flags.length > 0 ? (
+      {fetchFailed ? <Banner tone="warning">收入拉取失败</Banner> : null}
+      {overview && overview.gap_flags.some((flag) => flag !== "gromore_fetch_failed") ? (
         <Banner tone={overview.gap_flags.every((flag) => flag.startsWith("today_excluded")) ? "info" : "warning"}>
-          {overview.gap_flags.map(explainGap).join(" · ")}
+          {overview.gap_flags.filter((flag) => flag !== "gromore_fetch_failed").map(explainGap).join(" · ")}
         </Banner>
       ) : null}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-2" aria-label="盈亏">
@@ -130,13 +113,13 @@ function Body({ f, trio, overviewError, costError, onRetryOverview, onRetryCost 
           <Link href={hrefFor("/revenues", f)} className={linkCls}>
             <Kpi size="lg" label={`收入 · ${basis}`} value={formatFen(overview.total_fen, u)} hint={`${overview.from ?? "—"} ~ ${overview.to ?? "—"} · 点进收入`} />
           </Link>
-        ) : overviewError ? <ErrorState path={overviewError.path} message={overviewError.message} requestId={overviewError.requestId} onRetry={onRetryOverview} /> : <Skeleton className="h-[104px]" />}
-        {costs ? (
-          <Kpi size="lg" label="消耗" value={formatFen(costs.total_fen, u)} hint={costs.total_fen == null ? (costs.gap ?? "消耗没有数") : `${costs.from} ~ ${costs.to}`} />
-        ) : costError ? <ErrorState path={costError.path} message={costError.message} requestId={costError.requestId} onRetry={onRetryCost} /> : <Skeleton className="h-[104px]" />}
+        ) : overviewError && !pending ? <ErrorState path={overviewError.path} message={overviewError.message} requestId={overviewError.requestId} onRetry={onRetryOverview} /> : <Skeleton className="h-[104px]" aria-busy="true" aria-label="收入更新中" />}
+        {costs && costShown ? (
+          <Kpi size="lg" label={costShown.partial ? "消耗 · 部分" : "消耗"} value={formatFen(costShown.fen, u)} hint={costShown.partial ? `覆盖 ${costs.covered}/${costs.expected} 天` : `${costs.from} ~ ${costs.to}`} />
+        ) : costError && !pending ? <ErrorState path={costError.path} message={costError.message} requestId={costError.requestId} onRetry={onRetryCost} /> : <Skeleton className="h-[104px]" aria-busy="true" aria-label="消耗更新中" />}
         <Kpi size="lg" label="盈亏" value={formatFen(pnl.fen, u, true)} tone={pnl.tone} hint={pnl.text} />
       </div>
-      {partial && costs ? <Banner tone="warning">已返回消耗 {formatFen(costs.partial_fen, u)}。{costs.gap}，没有算进盈亏。</Banner> : null}
+      {costShown?.partial && costs ? <Banner tone="warning">消耗覆盖 {costs.covered}/{costs.expected} 天{pnl.fen != null ? "。盈亏只用已覆盖整天的月份：这些月的收入 − 这些月的消耗" : ""}。</Banner> : null}
       <div className="max-w-sm">
         <Link href={hrefFor("/recharges", f, { fund: "recharge" })} className={linkCls}>
           <Kpi size="sm" label="代理商充值" value={formatFen(recharge, u)} hint={summary ? `${summary.from} ~ ${summary.to} · 一代→二代` : "总账还没到"} />
@@ -145,7 +128,7 @@ function Body({ f, trio, overviewError, costError, onRetryOverview, onRetryCost 
       {overview ? (
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-2">
           <div className="lg:col-span-3">
-            <MonthTable overview={overview} costs={aligned ? costs : null} unit={u} />
+            <MonthTable overview={overview} costs={costs} unit={u} />
           </div>
           <div className="lg:col-span-2">
             <Panel title="分网络" extra={basis} flush>
@@ -182,6 +165,7 @@ function MonthTable({ overview, costs, unit }: { overview: RevenueOverview; cost
           {months.map((month) => {
             const clip = costs ? clipMonth(month.period, costs.from, costs.to) : null;
             const monthCost = clip && costs ? sliceCostWindow(costs, clip[0], clip[1]) : null;
+            const monthShown = monthCost ? shownCost(monthCost) : null;
             const monthPnl = profitAndLoss(
               { total_fen: month.amount_fen, from: clip?.[0] ?? null, to: clip?.[1] ?? null },
               monthCost,
@@ -191,7 +175,7 @@ function MonthTable({ overview, costs, unit }: { overview: RevenueOverview; cost
                 <TableCell className="num text-left">{month.period}</TableCell>
                 <TableCell className="text-right"><Money fen={month.amount_fen} unit={unit} /></TableCell>
                 <TableCell>{month.basis === "estimate" ? "预估" : "结算"}</TableCell>
-                <TableCell className="text-right"><Money fen={monthCost?.total_fen} unit={unit} /></TableCell>
+                <TableCell className="text-right"><Money fen={monthShown?.fen ?? null} unit={unit} />{monthShown?.partial ? <span className="ml-1 text-[11px] text-muted-foreground">部分</span> : null}</TableCell>
                 <TableCell className="text-right"><Money fen={monthPnl.fen} unit={unit} signed tone={monthPnl.fen != null && monthPnl.fen < 0} /></TableCell>
               </TableRow>
             );

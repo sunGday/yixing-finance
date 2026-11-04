@@ -127,6 +127,23 @@ export function clipMonth(period: string, from: string, to: string): [string, st
   return [a, b];
 }
 
+/** 只采用与当前筛选同一区间的一份。换区间时丢掉上一份，避免旧数字留在新日期下面。 */
+export function forRequestedRange<T extends { from: string | null; to: string | null }>(
+  data: T | undefined,
+  from: string,
+  to: string,
+): T | undefined {
+  if (!data || data.from !== from || data.to !== to) return undefined;
+  return data;
+}
+
+/** 铺满用 total；没铺满用 partial，并标成部分。没有数就留空，不用 0。 */
+export function shownCost(cost: CostWindow): { fen: number | null; partial: boolean } {
+  if (cost.total_fen != null) return { fen: cost.total_fen, partial: false };
+  if (cost.partial_fen != null) return { fen: cost.partial_fen, partial: true };
+  return { fen: null, partial: false };
+}
+
 export function incomeBasis(months: { basis: string }[], fallback: string): string {
   const kinds = new Set(months.map((month) => month.basis));
   if (kinds.size > 1) return "预估与结算";
@@ -137,20 +154,56 @@ export function incomeBasis(months: { basis: string }[], fallback: string): stri
   return fallback || "—";
 }
 
+function describe(fen: number, extra?: string): ProfitLoss {
+  const base = fen > 0 ? "赚了" : fen < 0 ? "亏了" : "持平";
+  const text = extra ? `${base} · ${extra}` : base;
+  if (fen > 0) return { fen, text, tone: "success" };
+  if (fen < 0) return { fen, text, tone: "danger" };
+  return { fen, text, tone: undefined };
+}
+
+/**
+ * 消耗没铺满时，只用「整段都被消耗盖住」的月份：
+ * 该月在查询区间里的收入 − 这些天的消耗。盖不住的月份不拿全年收入去减。
+ */
+function coveredMonthPnl(
+  months: { period: string; amount_fen: number | null }[],
+  cost: CostWindow,
+): { fen: number; days: number } | null {
+  let income = 0;
+  let spend = 0;
+  let days = 0;
+  let any = false;
+  for (const month of months) {
+    const clip = clipMonth(month.period, cost.from, cost.to);
+    if (!clip || month.amount_fen == null) continue;
+    const slice = sliceCostWindow(cost, clip[0], clip[1]);
+    if (slice.total_fen == null) continue;
+    income += month.amount_fen;
+    spend += slice.total_fen;
+    days += slice.expected;
+    any = true;
+  }
+  return any ? { fen: income - spend, days } : null;
+}
+
 export function profitAndLoss(
-  revenue: { total_fen: number | null; from: string | null; to: string | null } | null,
+  revenue: {
+    total_fen: number | null;
+    from: string | null;
+    to: string | null;
+    by_month?: { period: string; amount_fen: number | null }[];
+  } | null,
   cost: CostWindow | null,
 ): ProfitLoss {
   if (!revenue || !cost) return { fen: null, text: "收入或消耗还没到", tone: undefined };
   if (!revenue.from || !revenue.to || revenue.from !== cost.from || revenue.to !== cost.to) {
-    return { fen: null, text: "区间还没对齐，不算盈亏", tone: undefined };
+    return { fen: null, text: "区间还没对齐", tone: undefined };
   }
-  if (revenue.total_fen == null) return { fen: null, text: "收入没有数，不算盈亏", tone: undefined };
-  if (cost.total_fen == null) {
-    return { fen: null, text: cost.gap ? `${cost.gap}，不算盈亏` : "消耗没有数，不算盈亏", tone: undefined };
-  }
-  const fen = revenue.total_fen - cost.total_fen;
-  if (fen > 0) return { fen, text: "赚了", tone: "success" };
-  if (fen < 0) return { fen, text: "亏了", tone: "danger" };
-  return { fen, text: "持平", tone: undefined };
+  if (revenue.total_fen == null) return { fen: null, text: "收入没有数", tone: undefined };
+  if (cost.total_fen != null) return describe(revenue.total_fen - cost.total_fen);
+  const covered = coveredMonthPnl(revenue.by_month ?? [], cost);
+  if (covered) return describe(covered.fen, `已覆盖 ${covered.days} 天`);
+  const cover = cost.expected ? `消耗覆盖 ${cost.covered}/${cost.expected} 天` : "消耗没有铺满";
+  return { fen: null, text: cover, tone: undefined };
 }
