@@ -1,0 +1,71 @@
+# Live stack for yunrong.ink — api is NOT published; the browser never sees FIN_API_TOKEN.
+#
+# This ECS already runs Nginx Proxy Manager on 80/443. The default project is
+# api + web only and does not bind those ports. Both join the NPM network so
+# the Proxy Host can reach http://web:3000. Scheme A: do NOT proxy /api/v1 to api.
+# The Next BFF (web/app/api/v1/[...path]) injects Authorization.
+#
+#   docker compose up -d --build
+#
+# Non-NPM host (this file's nginx binds 80/443 — do not use that on the ECS):
+#
+#   docker compose --profile bundled-nginx up -d --build
+#
+# Network name: FIN_PROXY_NETWORK (default nginx-proxy-manage_default).
+
+name: yixing-finance
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+    env_file: [.env]
+    environment:
+      FIN_REQUIRE_TOKEN: "1"
+      FIN_CORS_ORIGINS: "https://yunrong.ink,https://www.yunrong.ink"
+      FIN_REVENUE_MOCK: "0"
+      FIN_DATA_DIR: /data/finance
+    volumes:
+      - /var/lib/yixing-finance/finance:/data/finance
+    expose: ["8787"]
+    networks:
+      edge:
+        aliases: [api]
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+    env_file: [.env]
+    environment:
+      NEXT_PUBLIC_FINANCE_API_BASE: /api/v1
+      FINANCE_API_INTERNAL_BASE: http://api:8787/api/v1
+      # FIN_API_TOKEN comes from env_file — server-only. The BFF sets
+      # Authorization: Bearer ${FIN_API_TOKEN}. Never set NEXT_PUBLIC_FIN_API_TOKEN.
+      HOSTNAME: "0.0.0.0"
+      PORT: "3000"
+    depends_on: [api]
+    expose: ["3000"]
+    networks:
+      edge:
+        aliases: [web]
+    restart: unless-stopped
+
+  nginx:
+    profiles: [bundled-nginx]
+    image: nginx:1.27-alpine
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./nginx/yunrong.ink.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certbot/www:/var/www/certbot:ro
+      - ./certbot/conf:/etc/letsencrypt:ro
+    depends_on: [web]
+    networks: [edge]
+    restart: unless-stopped
+
+networks:
+  edge:
+    name: "${FIN_PROXY_NETWORK:-nginx-proxy-manage_default}"
+    external: true

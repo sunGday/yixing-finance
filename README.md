@@ -2,6 +2,8 @@
 
 翊行二代户只读财务台账，外加同仓 FastAPI（`/api/v1`）。金额内部为分，界面默认显示元（两位小数）。界面无录入、打款、关账控件。
 
+**Pages = fixtures。Live = Docker Compose on [yunrong.ink](https://yunrong.ink)**（Nginx Proxy Manager → `web:3000`，见 [`deploy/README.md`](deploy/README.md)）。浏览器只打 `/api/v1`；Bearer 由 Next BFF 注入，不进前端包。
+
 ## How to open the UI
 
 两套数据，不要混：
