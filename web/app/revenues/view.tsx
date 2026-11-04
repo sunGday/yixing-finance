@@ -45,7 +45,7 @@ export function RevenuesView() {
           : liveOn && live.loading ? <PageSkeleton />
           : liveOn && live.error ? <ErrorState {...live.error} onRetry={live.retry} />
           : <>
-            <PageHeader title="收入流水" unit={u} from={f.from} to={f.to} mock={f.mock} />
+            <PageHeader title="收入流水" unit={u} from={f.from} to={f.to} />
             <Banner tone="info">默认含预估与结算。关账以结算为准。</Banner>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
               <Kpi size="lg" label="净收入 · 主指标" value={formatFen(net, u)} hint={`${rv.length} 行`} />

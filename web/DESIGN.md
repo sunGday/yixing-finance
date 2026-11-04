@@ -43,7 +43,7 @@
 ## 性能
 
 - Pages 默认把 fixtures 打进对应路由的客户端包，首屏 HTML 即含默认筛选下的数字，不发接口。
-- `api-client` 只在设置了 `NEXT_PUBLIC_FINANCE_API_BASE` 且没有 `?mock=1` 时动态导入。多列表用一次 `Promise.all`。
+- `next dev` / `next start` 默认 `NEXT_PUBLIC_FINANCE_MODE=live`，请求 `/api/v1`。`build:pages`（`STATIC_EXPORT=1`）强制 `fixtures`，不注入该 base。`?mock=1` 仍切样例。`api-client` 只在 live 时动态导入。
 - 不引入图表库。柱和占比是路由内的小 SVG / div。
 - 对账抽屉、表、Sheet 只在 `/reconcile` 路由包里。根布局只有壳和筛选。
 - 路由切换保留 `loading.tsx` 骨架。
