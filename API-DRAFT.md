@@ -145,5 +145,11 @@
 - `/recharges` 每行多 `side`（`omni_parent_in|platform_direct|transfer_out|reclaim_in`）与 `to_owner_name`；`data` 附 basis 字段与 `source`。可传 `side=` 过滤。
 - `/recharges/summary` 增 `total_amount_fen`（仅主口径）、`side_items[]`（旁报，不并入）。
 - `/revenues` 增 `source`(mock|live)、`verified:false`、`gap_flags`、`auth_note`；`strict=true` 无凭证 → 50301。
-- `/reconcile/summaries` 仅 `granularity=day`；期初/期末余额、消耗、子户层未接入 → 对应侧 null + gap_flags；mock 收入不参与对账。
-- `/costs`、`/snapshots` 为 stub（空 items + gap_flags）。
+- `/reconcile/summaries` 仅 `granularity=day`；mock 收入不参与对账。v0.4：fund_equation 两行——
+  ① `owner:1001108443` 代理商树口径（代理商自身余额**无 Omni 读接口** → `agency_balance_unavailable` + open/close 缺口）；
+  ② `subs:1001108443` 子户口径：Δ子户余额合计(快照) = 划拨−划回−消耗+平台直充(调整)。快照为取数时刻非日终，首个快照(2026-11-04)前无历史 → `open_balance_missing`。
+  agency_daily：子户侧入账流水无接口 → `sub_inflow_ledger_unavailable`。cross_source 用真实消耗 cost_fen；收入无凭证仍 `revenue_missing`。
+- `/costs`（v0.4 live）：queryAdData owner 级按日×子户求和（分）；任一子户失败 → 当日 `complete=false`、`cost_fen=null`、`cost_missing:<date>`；当日为 `cost_intraday`。
+- `/snapshots`（v0.4 live）：代理商 customer/list 子户 totalBalance（分）；`agency_balance_unavailable`、`historical_balance_before_first_snapshot`。
+- 新增 `POST /api/v1/admin/refresh/{recharges|snapshot|costs}?start_date&end_date`（只读拉 Omni→落盘→重载；costs ≤7 天/次）、`POST /api/v1/admin/reload`；CORS 放开 POST。
+- 收入：`/home/box/.secrets` 无 PANGLE_*/YLH_*/GDT_* → `credential_missing:pangle|ylh`（BLOCKED，见 handoff）。

@@ -16,8 +16,8 @@ CRED_KEYS = ("PANGLE_USER_ID", "PANGLE_ROLE_ID", "PANGLE_SECURE_KEY", "YLH_MEMBE
 class ApiT(unittest.TestCase):
     def setUp(self):
         self._env = dict(os.environ)
-        for k in CRED_KEYS + ("FIN_API_TOKEN", "FIN_REVENUE_MOCK"): os.environ.pop(k, None)
-        self.c = TestClient(create_app(st.RechargeStore(ROWS)))
+        for k in CRED_KEYS + ("FIN_API_TOKEN", "FIN_REVENUE_MOCK", "FIN_REQUIRE_TOKEN"): os.environ.pop(k, None)
+        self.c = TestClient(create_app(st.RechargeStore(ROWS), st.CostStore(), st.SnapshotStore()))
 
     def tearDown(self):
         os.environ.clear(); os.environ.update(self._env)
@@ -60,20 +60,71 @@ class ApiT(unittest.TestCase):
         tabs = {r["tab"] for r in d["items"]}; self.assertEqual(tabs, {"fund_equation", "agency_daily", "revenue_dedup", "cross_source"})
         fe = [r for r in d["items"] if r["tab"] == "fund_equation"][0]
         self.assertIsNone(fe["left_fen"]); self.assertIsNone(fe["delta_fen"]); self.assertTrue(fe["components"])
-        self.assertEqual(fe["components"][0]["amount_fen"], 2000000); self.assertLess(fe["components"][1]["amount_fen"], 0)
+        self.assertEqual(fe["components"][0]["amount_fen"], 2000000); self.assertIn("cost_missing", fe["gap_flags"]); self.assertIn("agency_balance_unavailable", fe["gap_flags"])
         x = self.c.get("/api/v1/reconcile/summaries", params={"tab": "cross_source"}).json()["data"]["items"]
         self.assertTrue(x and all(r["tab"] == "cross_source" and r["gross_profit_draft_fen"] is None for r in x))
         self.assertEqual(self.c.get("/api/v1/reconcile/summaries", params={"tab": "kind"}).json()["code"], 40002)
 
     def test_stubs_and_cors(self):
         self.assertEqual(self.c.get("/api/v1/costs").json()["data"]["items"], [])
-        self.assertIn("balance_snapshot_not_wired", self.c.get("/api/v1/snapshots").json()["data"]["gap_flags"])
+        self.assertIn("balance_snapshot_empty", self.c.get("/api/v1/snapshots").json()["data"]["gap_flags"])
         r = self.c.options("/api/v1/health", headers={"Origin": "http://localhost:5173", "Access-Control-Request-Method": "GET"})
         self.assertEqual(r.status_code, 200); self.assertIn("access-control-allow-origin", r.headers)
 
     def test_cache_store(self):
         s = st.RechargeStore.from_cache()
-        self.assertIn(s.source, ("jsonl_cache", "empty"))
+        self.assertIn(s.source, ("omni_billhis_cache", "empty"))
+
+    def test_require_token_blocks_open_dev(self):
+        os.environ["FIN_REQUIRE_TOKEN"] = "1"
+        self.assertEqual(self.c.get("/api/v1/health").status_code, 503)
+        os.environ.pop("FIN_REQUIRE_TOKEN")
+        self.assertEqual(self.c.get("/api/v1/health", headers={"X-Forwarded-For": "1.2.3.4"}).status_code, 503)
+        os.environ["FIN_API_TOKEN"] = "t"
+        self.assertEqual(self.c.get("/api/v1/health", headers={"X-Forwarded-For": "1.2.3.4", "Authorization": "Bearer t"}).status_code, 200)
+
+    def test_cors_post(self):
+        r = self.c.options("/api/v1/admin/reload", headers={"Origin": "http://localhost:3000", "Access-Control-Request-Method": "POST"})
+        self.assertEqual(r.status_code, 200)
+
+    def test_refresh_bad_kind(self):
+        self.assertEqual(self.c.post("/api/v1/admin/refresh/nope").json()["code"], 40001)
+
+
+COST = {"2026-11-03": {"biz_date": "2026-11-03", "complete": True, "cost_fen": 1000, "per_owner_fen": {"2": 1000}, "failed_owners": {}},
+        "2026-11-02": {"biz_date": "2026-11-02", "complete": False, "cost_fen": None, "per_owner_fen": {}, "failed_owners": {"2": "X"}}}
+SNAP = {"2026-11-02": {"snapshot_date": "2026-11-02", "sub_sum_fen": 10000}, "2026-11-03": {"snapshot_date": "2026-11-03", "sub_sum_fen": 9000}}
+
+
+class LiveInjectT(unittest.TestCase):
+    def setUp(self):
+        self.c = TestClient(create_app(st.RechargeStore(ROWS), st.CostStore(COST), st.SnapshotStore(SNAP)))
+
+    def test_costs_snapshots(self):
+        d = self.c.get("/api/v1/costs").json()["data"]
+        self.assertEqual(d["total"], 2); self.assertIn("cost_missing:2026-11-02", d["gap_flags"])
+        self.assertEqual(self.c.get("/api/v1/snapshots").json()["data"]["total"], 2)
+
+    def test_reconcile_with_live(self):
+        it = self.c.get("/api/v1/reconcile/summaries", params={"start_date": "2026-11-03", "end_date": "2026-11-03"}).json()["data"]["items"]
+        subs = [r for r in it if r["scope"].startswith("subs:")][0]
+        # Δ=9000-10000=-1000 ; right = (300-0) - 1000 + 500 = -200 → delta -800, explicit unmatched, no fake match
+        self.assertEqual(subs["left_fen"], -1000); self.assertEqual(subs["right_fen"], -200); self.assertEqual(subs["status"], "unmatched")
+        x = [r for r in it if r["tab"] == "cross_source"][0]; self.assertEqual(x["cost_fen"], 1000)
+        it2 = self.c.get("/api/v1/reconcile/summaries", params={"start_date": "2026-11-02", "end_date": "2026-11-02"}).json()["data"]["items"]
+        s2 = [r for r in it2 if r["scope"].startswith("subs:")][0]
+        self.assertIn("cost_missing", s2["gap_flags"]); self.assertIn("open_balance_missing", s2["gap_flags"])
+
+
+class RefreshMapT(unittest.TestCase):
+    def test_to_txn_and_classify(self):
+        from sources import refresh  # noqa: import must not need network/secrets
+        from oppo_omni import finance as F
+        t = F.to_txn({"billTime": "2026-11-03 10:00:00", "billMoney": 123, "billType": 0, "billSub": 300, "relateOwnerId": 1000015399}, "r")
+        r = st._norm(t); self.assertEqual(r["side"], "omni_parent_in"); self.assertEqual(r["amount_fen"], 123); self.assertEqual(r["hour"], 10)
+
+    def test_cost_store_never_zero_fill(self):
+        self.assertIsNone(st.CostStore(COST).cost_fen("2026-11-02")); self.assertIsNone(st.CostStore().cost_fen("2026-11-03"))
 
 
 if __name__ == "__main__":

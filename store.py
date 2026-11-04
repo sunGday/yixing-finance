@@ -46,7 +46,10 @@ def find_cache_files() -> list[str]:
     if env:
         return [p for p in env.split(os.pathsep) if os.path.exists(p)]
     root = os.path.abspath(os.path.join(HERE, ".."))
-    return sorted(glob.glob(os.path.join(root, "**", f"billHis-{AGENCY_OWNER_ID}-*.jsonl"), recursive=True))
+    fs = set(glob.glob(os.path.join(root, "**", f"billHis-{AGENCY_OWNER_ID}-*.jsonl"), recursive=True))
+    dd = os.environ.get("FIN_DATA_DIR")
+    if dd: fs |= set(glob.glob(os.path.join(dd, f"billHis-{AGENCY_OWNER_ID}-*.jsonl")))
+    return sorted(fs, key=os.path.getmtime, reverse=True)  # newest first → newest wins on txn_id dedupe
 
 
 class RechargeStore:
@@ -69,7 +72,7 @@ class RechargeStore:
         for f in files:
             with open(f, encoding="utf-8") as fh:
                 rows += [json.loads(l) for l in fh if l.strip()]
-        s = cls(rows, source="jsonl_cache" if files else "empty")
+        s = cls(rows, source="omni_billhis_cache" if files else "empty")
         s.files = [os.path.relpath(f, os.path.join(HERE, "..")) for f in files]
         return s
 
@@ -112,3 +115,41 @@ def load_revenues(networks=("pangle", "ylh"), env=None, allow_mock=True):
                 d = asdict(ad.map_row(raw, raw["date"], evidence_ref="mock-fixture"))
                 d.update(source="mock", verified=False); items.append(d)
     return items, gaps, notes
+
+
+# ---- costs / balance snapshots (file-backed, written by sources/refresh.py; never 0-filled) ----
+class CostStore:
+    def __init__(self, days: dict | None = None):
+        self.days = days or {}
+
+    @classmethod
+    def from_disk(cls):
+        from sources.refresh import load_dir
+        return cls(load_dir("costs", "cost"))
+
+    def cost_fen(self, d):
+        r = self.days.get(d); return r.get("cost_fen") if r and r.get("complete") else None
+
+    def items(self, s=None, e=None):
+        return [{k: v for k, v in r.items() if k != "request_ids"} for d, r in sorted(self.days.items(), reverse=True)
+                if (not s or d >= s) and (not e or d <= e)]
+
+
+class SnapshotStore:
+    def __init__(self, days: dict | None = None):
+        self.days = days or {}
+
+    @classmethod
+    def from_disk(cls):
+        from sources.refresh import load_dir
+        return cls(load_dir("snapshots", "snapshot"))
+
+    def sub_sum(self, d):
+        r = self.days.get(d); return r.get("sub_sum_fen") if r else None
+
+    def prior(self, d):
+        prev = (__import__("datetime").date.fromisoformat(d) - __import__("datetime").timedelta(days=1)).isoformat()
+        return self.sub_sum(prev)
+
+    def items(self, s=None, e=None):
+        return [r for d, r in sorted(self.days.items(), reverse=True) if (not s or d >= s) and (not e or d <= e)]

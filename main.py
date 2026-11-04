@@ -11,11 +11,13 @@ from api.routes import router, ApiError, rid, VERSION
 import store as st
 
 
-def create_app(recharge_store: st.RechargeStore | None = None) -> FastAPI:
+def create_app(recharge_store: st.RechargeStore | None = None, cost_store=None, snapshot_store=None) -> FastAPI:
     app = FastAPI(title="yixing-finance", version=VERSION)
     app.state.recharges = recharge_store if recharge_store is not None else st.RechargeStore.from_cache()
+    app.state.costs = cost_store if cost_store is not None else st.CostStore.from_disk()
+    app.state.snapshots = snapshot_store if snapshot_store is not None else st.SnapshotStore.from_disk()
     origins = [o for o in os.environ.get("FIN_CORS_ORIGINS", "*").split(",") if o]
-    app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "OPTIONS"],
+    app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST", "OPTIONS"],
                        allow_headers=["*"], expose_headers=["X-Auth-Mode"])
 
     @app.middleware("http")
@@ -24,6 +26,12 @@ def create_app(recharge_store: st.RechargeStore | None = None) -> FastAPI:
         if request.method == "OPTIONS" or not request.url.path.startswith("/api/"):
             return await call_next(request)
         if not tok:
+            host = request.client.host if request.client else ""
+            public = os.environ.get("FIN_REQUIRE_TOKEN") == "1" or host not in ("127.0.0.1", "::1", "localhost", "testclient") \
+                or any(ip.strip() not in ("127.0.0.1", "::1", "::ffff:127.0.0.1", "")
+                       for ip in request.headers.get("x-forwarded-for", "").split(","))
+            if public:  # 公网/代理入口禁止 open-dev
+                return JSONResponse({"code": 50302, "msg": "FIN_API_TOKEN not set; open-dev only on localhost", "request_id": rid(), "data": None}, 503)
             resp = await call_next(request); resp.headers["X-Auth-Mode"] = "open-dev"; return resp
         h = request.headers.get("authorization", "")
         if not (h.startswith("Bearer ") and hmac.compare_digest(h[7:], tok)):

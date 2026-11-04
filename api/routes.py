@@ -8,7 +8,7 @@ from adapters.base import normalize_network, SETTLEMENT_STATUS
 from reconcile import RECON_TABS, agency_daily, revenue_dedup, gross_profit_draft, daily_fund_equation
 import store as st
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 router = APIRouter(prefix="/api/v1")
 
 
@@ -48,7 +48,10 @@ def rstore(req: Request) -> st.RechargeStore: return req.app.state.recharges
 @router.get("/health")
 def health(req: Request):
     s = rstore(req)
+    from sources.refresh import read_meta
     return ok({"ok": True, "version": VERSION, "recharge_source": s.source, "recharge_rows": len(s.rows),
+               "recharge_files": getattr(s, "files", []), "cost_days": len(req.app.state.costs.days),
+               "snapshot_days": len(req.app.state.snapshots.days), "last_refresh": read_meta(),
                "auth_mode": "token" if os.environ.get("FIN_API_TOKEN") else "open-dev"})
 
 
@@ -121,8 +124,9 @@ def reconcile(req: Request, start_date: str | None = None, end_date: str | None 
     s, e = _dates(start_date, end_date)
     _enum(tab, RECON_TABS, "tab"); _enum(status, ("matched", "partial", "unmatched"), "status")
     _enum(granularity, ("day",), "granularity", 40001)
-    recs = rstore(req).query(s, e)
-    dates = sorted({r["biz_date"] for r in recs}, reverse=True)
+    recs = rstore(req).query(s, e); cs, ss = req.app.state.costs, req.app.state.snapshots
+    dates = sorted({r["biz_date"] for r in recs} | {d for d in list(cs.days) + list(ss.days)
+                   if (not s or d >= s) and (not e or d <= e)}, reverse=True)
     rev_items, rev_gaps, _ = _revenues(None, None, s, e)
     live_rev = [i for i in rev_items if i.get("source") != "mock"]  # mock 不进对账
     rows = []
@@ -135,18 +139,34 @@ def reconcile(req: Request, start_date: str | None = None, end_date: str | None 
         comps = [{"label": "一代→二代入账(充值)", "ref": f"omni_parent_in:{len(pin)}", "amount_fen": pin_fen},
                  {"label": "二代→子户划拨", "ref": f"transfer_out:{len(out)}", "amount_fen": -sum(r['amount_fen'] for r in out)},
                  {"label": "子户划回回收", "ref": f"reclaim_in:{len(rin)}", "amount_fen": sum(r['amount_fen'] for r in rin)}]
-        fe = daily_fund_equation(d, st.AGENCY_OWNER_ID, None, None, pin_fen, None, components=comps)
-        fe["note"] = "期初/期末余额与消耗未接入"; rows.append(fe)
-        sub_sum = None  # 子户层未接入
-        ag = agency_daily(d, st.AGENCY_OWNER_ID, sub_sum, sum(r["amount_fen"] for r in out) or None, components=comps[1:2])
-        ag["note"] = "子户层数据未接入"; rows.append(ag)
+        cost_fen = cs.cost_fen(d); plat = [r for r in day if r["side"] == "platform_direct"]
+        out_fen, rin_fen = sum(r["amount_fen"] for r in out), sum(r["amount_fen"] for r in rin)
+        cost_c = {"label": "Omni 消耗(子户 queryAdData)", "ref": "cost", "amount_fen": -cost_fen if cost_fen is not None else None}
+        # (1) 代理商树口径：Δ(代理商+子户余额) = 一代入账 - 消耗。代理商自身余额无读接口 → close/open 缺口
+        fe = daily_fund_equation(d, st.AGENCY_OWNER_ID, None, None, pin_fen, cost_fen, components=comps[:1] + [cost_c])
+        fe["gap_flags"] += ["agency_balance_unavailable"]; fe["note"] = "代理商自身余额无 Omni 读接口；见子户口径行"
+        rows.append(fe)
+        # (2) 子户口径：Δ子户余额合计 = 划拨入 - 划回 - 消耗 (+平台直充旁报作调整)
+        close_s, open_s = ss.sub_sum(d), ss.prior(d)
+        adj = sum(r["amount_fen"] for r in plat)
+        fs = daily_fund_equation(d, "subs-of-" + st.AGENCY_OWNER_ID, open_s, close_s, (out_fen - rin_fen) if day else None,
+                                 cost_fen, adjust_fen=adj,
+                                 components=[{"label": "二代→子户划拨-划回", "ref": f"transfer_out:{len(out)}/reclaim_in:{len(rin)}", "amount_fen": out_fen - rin_fen},
+                                             cost_c, {"label": "平台直充(旁报,调整项)", "ref": f"platform_direct:{len(plat)}", "amount_fen": adj},
+                                             {"label": "子户余额期初(前日快照)", "ref": "snapshot", "amount_fen": open_s},
+                                             {"label": "子户余额期末(当日快照)", "ref": "snapshot", "amount_fen": close_s}])
+        fs["scope"] = f"subs:{st.AGENCY_OWNER_ID}"; fs["recon_id"] = fs["recon_id"].replace("FE-subs-of-", "FE-SUBS-")
+        fs["note"] = "快照为取数时刻非日终；首个快照前无历史余额" if (close_s is None or open_s is None) else "快照为取数时刻，非日终"
+        rows.append(fs)
+        ag = agency_daily(d, st.AGENCY_OWNER_ID, None, out_fen or None, components=comps[1:2])
+        ag["gap_flags"] += ["sub_inflow_ledger_unavailable"]; ag["note"] = "子户侧入账流水无读接口（仅余额快照）"; rows.append(ag)
         for n in ("pangle", "ylh"):
             nr = [i for i in live_rev if i["ad_network"] == n and i["stat_date"] == d]
             est = sum(i["amount_fen"] for i in nr if i["settlement_status"] == "estimated") if nr else None
             stl = sum(i["amount_fen"] for i in nr if i["settlement_status"] != "estimated") or None if nr else None
             rd = revenue_dedup(d, n, est, stl); rd["gap_flags"] += [g for g in rev_gaps if g.endswith(":" + n)]; rows.append(rd)
         rev_by = {n: (sum(i["amount_fen"] for i in live_rev if i["ad_network"] == n and i["stat_date"] == d) or None) for n in ("pangle", "ylh")}
-        x = gross_profit_draft(d, rev_by, None, components=[{"label": "Omni 消耗", "ref": "cost", "amount_fen": None}])
+        x = gross_profit_draft(d, rev_by, cost_fen, components=[{"label": "Omni 消耗", "ref": "cost", "amount_fen": cost_fen}])
         rows.append(x)
     rows = [r for r in rows if (not tab or r["tab"] == tab) and (not status or r["status"] == status)]
     data = _page(rows, page, page_size); data.update(gap_flags=sorted(set(rev_gaps)), revenue_mock_excluded=True)
@@ -154,12 +174,42 @@ def reconcile(req: Request, start_date: str | None = None, end_date: str | None 
 
 
 @router.get("/costs")
-def costs(start_date: str | None = None, end_date: str | None = None, page: int = 1, page_size: int = 50):
-    _dates(start_date, end_date)
-    d = _page([], page, page_size); d.update(gap_flags=["cost_source_not_wired"], note="Omni 消耗未接入（stub）"); return ok(d)
+def costs(req: Request, start_date: str | None = None, end_date: str | None = None, page: int = 1, page_size: int = 50):
+    s, e = _dates(start_date, end_date); items = req.app.state.costs.items(s, e)
+    gaps = ["cost_source_empty"] if not items else []
+    gaps += [f"cost_missing:{i['biz_date']}" for i in items if not i.get("complete")]
+    gaps += [f"cost_intraday:{i['biz_date']}" for i in items if i.get("intraday")]
+    d = _page(items, page, page_size); d.update(source="omni_queryAdData_owner", unit="fen", gap_flags=gaps); return ok(d)
 
 
 @router.get("/snapshots")
-def snapshots(start_date: str | None = None, end_date: str | None = None, page: int = 1, page_size: int = 50):
-    _dates(start_date, end_date)
-    d = _page([], page, page_size); d.update(gap_flags=["balance_snapshot_not_wired"], note="余额快照未接入（stub）"); return ok(d)
+def snapshots(req: Request, start_date: str | None = None, end_date: str | None = None, page: int = 1, page_size: int = 50):
+    s, e = _dates(start_date, end_date); items = req.app.state.snapshots.items(s, e)
+    gaps = (["balance_snapshot_empty"] if not items else []) + ["agency_balance_unavailable", "historical_balance_before_first_snapshot"]
+    d = _page(items, page, page_size); d.update(source="omni_customer_list", unit="fen", gap_flags=gaps,
+                                               note="子户 totalBalance 取数时刻快照；代理商自身余额无读接口"); return ok(d)
+
+
+def reload_state(app):
+    app.state.recharges = st.RechargeStore.from_cache(); app.state.costs = st.CostStore.from_disk()
+    app.state.snapshots = st.SnapshotStore.from_disk()
+
+
+@router.post("/admin/reload")
+def admin_reload(req: Request):
+    reload_state(req.app); return health(req)
+
+
+@router.post("/admin/refresh/{kind}")
+def admin_refresh(req: Request, kind: str, start_date: str | None = None, end_date: str | None = None):
+    """Live READ-ONLY Omni pull. kind=recharges|snapshot|costs. Auth: Bearer FIN_API_TOKEN (open-dev if unset)."""
+    from sources import refresh as R
+    _enum(kind, ("recharges", "snapshot", "costs"), "kind", 40001)
+    s, e = _dates(start_date, end_date); e = e or R.today(); s = s or e
+    if kind == "costs" and (__import__("datetime").date.fromisoformat(e) - __import__("datetime").date.fromisoformat(s)).days > 6:
+        raise ApiError(40001, 400, "costs refresh max 7 days per call (rate limit); use CLI for backfill")
+    try:
+        r = R.refresh_recharges(s, e) if kind == "recharges" else R.refresh_snapshot() if kind == "snapshot" else R.refresh_costs(s, e)
+    except RuntimeError as x:
+        raise ApiError(50301, 503, f"omni credentials unavailable: {str(x)[:120]}")
+    reload_state(req.app); return ok({"kind": kind, "result": r})
