@@ -17,5 +17,7 @@ dist/
 *.egg-info/
 # 收入渠道凭证（t294u）：绝不入库
 revenue-credentials.json
+# 手工结算单落在 FIN_DATA_DIR，若误写进工作区也不入库
+settlements.json
 **/secrets/
 .rc-*

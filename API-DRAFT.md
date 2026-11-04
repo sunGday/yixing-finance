@@ -160,3 +160,60 @@ Body `{"fields":{KEY:value}}`；字段别名 `GDT_MEMBER_ID/GDT_SECRET`→`YLH_*
 响应 `{channel,label,status:configured|partial|missing,updated_at(+08:00),fields:[{key,label,secret,required,set,hint,source:file|env|none,overridden_by_env}]}`；secret hint 恒 `••••`，非 secret `首1***末2`（≤4 位 `****`）。
 错误：未知 channel/field `40002`；body 非 `{fields:{str:str}}`/含换行/超 4096 `40001`；鉴权同全局（40101/50302）。CORS 已放开 PUT/PATCH/DELETE。
 存储与优先级见 OPS.md「收入渠道凭证」。
+
+## 6. 收入总览 + 结算单（v0.6 实装 · t320u）
+
+主视图是 GroMore **收益报表总体**（分广告网络），不是 `/revenues` 的产品/代码位日明细。`/revenues` 保持原样，作下钻。
+
+预估来源：`GET https://www.csjplatform.com/union_media/open/api/mediation/get_daily_income_report_data`（可用 `CSJ_API_BASE` 换主机），`dimensions=date,network`，`metrics=revenue,api_revenue`。签名复用穿山甲 MD5（排序 `k=v` + security key）。凭证即 `PANGLE_*`，不新开渠道。单次 ≤30 天，更长分片。上海「今天」不进预估。
+
+Allen 2026-11-03 实测编码（当日 revenue 合计 13403.59 元 = 1340359 分）：`1→pangle`，`3→ylh`，`7→kuaishou`，`10→gm_adx`。其它编码 → `network_unmapped:<code>`，金额仍计入合计，不编造网络名。GroMore 失败或无凭证 → 只加总已有 live `rt/income` 穿山甲行（不用 mock），并打 `fallback_rt_income:pangle_only`。
+
+`settlement_status`：`estimated`（只展示，不入库、不入账）｜`settled`（结算单**完成签订**；待收票仍是 settled，不记第二笔收入）｜`paid`（已支付，只做收款，不记第二笔收入）。
+
+### `GET /api/v1/revenues/overview?from=&to=&basis=auto|estimate|settlement`
+
+`basis` 默认 `auto`：查询盖住整个自然月且该月有结算单 → 该月用结算额，否则用预估。`estimate` / `settlement` 强制切换。`basis=settlement` 缺单 → `gap_flags` 含 `settlement_missing:YYYY-MM`，该月 `amount_fen=null`，**不填 0**。
+
+Allen 实测锁定的是 **2026-11-03 合计 1340359 分**和上表编码，没有锁定各网拆分。响应形状（`networks[]` 为各网分，未映射编码只进 `total_fen` 和 `gap_flags`）：
+
+```json
+{"from":"2026-11-03","to":"2026-11-03","basis":"auto","source":"gromore_daily",
+ "total_fen":1340359,"api_total_fen":null,
+ "networks":[{"ad_network":"pangle|ylh|kuaishou|gm_adx","amount_fen":"<该网分>","api_amount_fen":null,
+              "basis":"estimate|settlement","settlement_status":"estimated|settled|paid"}],
+ "by_month":[{"period":"2026-11","basis":"estimate","settlement_status":"estimated","amount_fen":1340359,
+              "estimate_fen":1340359,"diff_fen":null}],
+ "gap_flags":[],"verified":true}
+```
+
+缺结算单时该月 `amount_fen` 为 `null`，不是 0。`ad_network: null` 表示这张单是该月总额。
+
+`ad_network` 空表示结算单是该月总额（未按网络拆）。`source`：`gromore_daily`｜`rt_income_fallback`｜`settlement_manual`｜`mixed`。
+
+### `GET /api/v1/revenues/overview/cards?basis=auto`
+
+昨日 / 近7日 / 本月 / 上月，日期按上海计算，截止昨天。本月 1 日尚无完整日 → 该卡 `today_excluded:<today>`，`total_fen=null`。
+
+### 结算单 CRUD（写操作鉴权与其它写接口相同：`FIN_API_TOKEN` / `FIN_REQUIRE_TOKEN`）
+
+文件：`$FIN_DATA_DIR/settlements.json`（不是 secrets）。字段：`settlement_id`，`period`（YYYY-MM），`business_type`（`sdk_ads|ad_coop`），`ad_network`（可空=总额；`pangle|ylh|kuaishou|gm_adx`，别名 `gdt|ks`），`amount_fen`，`settlement_status`（只能 `settled|paid`），`signed_date`，`paid_date`，`evidence_ref`（不得夹带密钥；响应里若命中 env 密钥会打成 `••••`），`created_at` / `updated_at`（+08:00）。
+
+- `GET /api/v1/settlements?period=&settlement_status=&ad_network=&postable=true`
+- `POST /api/v1/settlements` JSON 对象
+- `PATCH /api/v1/settlements/{id}`：`settled→paid`（可带 `paid_date`，缺则上海今天）。不能退回 `settled`，不能写成 `estimated`
+- `POST /api/v1/settlements/import`：`{"items":[...]}` 或 CSV 表头同字段。`amount_fen` 为整数分
+
+`postable=true` 给出已签订或已支付且有证据的单，供 holiday 入账；拉取方按 `settlement_id` 去重。关账只认 `settled`+`paid`。
+
+```bash
+B=http://127.0.0.1:8787/api/v1
+curl -sS "$B/revenues/overview?from=2026-11-03&to=2026-11-03&basis=auto"
+curl -sS "$B/revenues/overview?from=2026-10-01&to=2026-10-31&basis=settlement"
+curl -sS "$B/revenues/overview/cards"
+curl -sS -X POST "$B/settlements" -H "Authorization: Bearer $FIN_API_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"period":"2026-10","business_type":"sdk_ads","amount_fen":1340359,"settlement_status":"settled","signed_date":"2026-11-02","evidence_ref":"gromore-bill-2026-10"}'
+curl -sS -X PATCH "$B/settlements/stl-REPLACE" -H "Authorization: Bearer $FIN_API_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"settlement_status":"paid","paid_date":"2026-11-04"}'
+curl -sS "$B/settlements?period=2026-10&postable=true" -H "Authorization: Bearer $FIN_API_TOKEN"
+```

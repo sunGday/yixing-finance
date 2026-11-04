@@ -13,11 +13,16 @@ from credentials_store import CredentialStore
 
 
 def create_app(recharge_store: st.RechargeStore | None = None, cost_store=None, snapshot_store=None,
-               credential_store: CredentialStore | None = None) -> FastAPI:
+               credential_store: CredentialStore | None = None, *, settlement_store=None, gromore_client=None,
+               overview_today=None, pangle_live_items=None) -> FastAPI:
     app = FastAPI(title="yixing-finance", version=VERSION)
     app.state.recharges = recharge_store if recharge_store is not None else st.RechargeStore.from_cache()
     app.state.costs = cost_store if cost_store is not None else st.CostStore.from_disk()
     app.state.snapshots = snapshot_store if snapshot_store is not None else st.SnapshotStore.from_disk()
+    app.state.settlements = settlement_store if settlement_store is not None else st.SettlementStore()
+    app.state.gromore_client = gromore_client
+    app.state.overview_today = overview_today
+    app.state.pangle_live_items = pangle_live_items
     # 收入渠道凭证：FIN_SECRETS_DIR 文件 → 合并进 os.environ（进程 env 优先），适配器直接读
     app.state.credentials = credential_store if credential_store is not None else CredentialStore()
     origins = [o for o in os.environ.get("FIN_CORS_ORIGINS", "*").split(",") if o]

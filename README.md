@@ -48,9 +48,9 @@ cd web && npm i && npm run dev
 
 前端说明：[`web/DESIGN.md`](web/DESIGN.md)、[`web/VISUAL.md`](web/VISUAL.md)、[`docs/IA.md`](docs/IA.md)。截图在 [`web/docs/screenshots/`](web/docs/screenshots/)。
 
-## API（FastAPI · v0.3）
+## API（FastAPI · v0.6）
 
-不启投、不写 Omni。穿山甲在凭证齐全时只读拉取预估收入；优量汇仍不发真实 HTTP。密钥不入库。草案见 `API-DRAFT.md`。代码：`main.py`、`api/routes.py`、`adapters/`、`sources/omni_billhis.py`、`reconcile.py`。
+不启投、不写 Omni。穿山甲明细在凭证齐全时只读拉取 `rt/income`；优量汇仍不发真实 HTTP。收入**总览**在有 `PANGLE_*` 时请求 GroMore 日报（分网络预估），失败则加总同一套 live 穿山甲行。单测注入 mock HTTP，不打穿山甲。密钥不入库。草案见 `API-DRAFT.md`。代码：`main.py`、`api/routes.py`、`overview.py`、`adapters/`、`sources/omni_billhis.py`、`reconcile.py`。
 
 ```bash
 pip install -r requirements.txt
@@ -58,7 +58,8 @@ uvicorn main:app --host 127.0.0.1 --port 8787
 python3 -m unittest discover -s tests -t . -v
 ```
 
-- Base URL：`http://127.0.0.1:8787/api/v1`。端点 `health` `recharges` `recharges/summary` `revenues` `reconcile/summaries` `costs`（stub）`snapshots`（stub）
+- Base URL：`http://127.0.0.1:8787/api/v1`。端点 `health` `recharges` `recharges/summary` `revenues`（明细）`revenues/overview` `revenues/overview/cards` `settlements` `reconcile/summaries` `costs` `snapshots`
+- 总览默认按广告网络汇总 GroMore 预估（`revenue` / `api_revenue`），不是产品/代码位日行。`basis=auto|estimate|settlement`。整月且已有结算单时 auto 改用结算额；`basis=settlement` 缺单返回 `settlement_missing:YYYY-MM`，不填 0。结算单手工写入 `$FIN_DATA_DIR/settlements.json`（非 secrets）。正式入账触发是结算单**完成签订** → `settled`；`paid` 只表示收款。
 - 鉴权：`Authorization: Bearer $FIN_API_TOKEN`。未设 env → 开发放行并回 `X-Auth-Mode: open-dev`。错或缺少 token → 401 `40101`
 - CORS：`FIN_CORS_ORIGINS`（逗号分隔，默认 `*`，上线前收紧）
 - 充值：只读 Omni billHis JSONL（自动搜 `../**/billHis-1001108443-*.jsonl`，或 `FIN_RECHARGE_JSONL`）

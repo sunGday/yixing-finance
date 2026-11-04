@@ -1,5 +1,5 @@
 from __future__ import annotations
-import datetime as dt, os, uuid
+import csv, datetime as dt, io, json, os, re, uuid
 from collections import defaultdict
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
@@ -8,7 +8,7 @@ from adapters.base import normalize_network, SETTLEMENT_STATUS
 from reconcile import RECON_TABS, agency_daily, revenue_dedup, gross_profit_draft, daily_fund_equation
 import store as st
 
-VERSION = "0.5.1"
+VERSION = "0.6.0"
 router = APIRouter(prefix="/api/v1")
 
 
@@ -141,6 +141,59 @@ def revenues(start_date: str | None = None, end_date: str | None = None, date: s
     d = _page(items, page, page_size)
     d.update(source=_revenue_source(items), verified=verified, gap_flags=gaps, auth_note=notes)
     return ok(d)
+
+
+def _today(req: Request) -> dt.date:
+    today = getattr(req.app.state, "overview_today", None)
+    if callable(today):
+        today = today()
+    if isinstance(today, str):
+        today = dt.date.fromisoformat(today)
+    return today or st.sh_today()
+
+
+def _gromore(req: Request):
+    client = getattr(req.app.state, "gromore_client", None)
+    if client is not None:
+        return client
+    from adapters.gromore import GroMoreClient
+    return GroMoreClient()
+
+
+def _settle_items(req: Request):
+    try:
+        return req.app.state.settlements.load()
+    except st.SettlementError as e:
+        raise ApiError(e.code, e.http, e.msg)
+
+
+def _basis(basis: str) -> str:
+    _enum(basis, ("auto", "estimate", "settlement"), "basis")
+    return basis
+
+
+@router.get("/revenues/overview")
+def revenues_overview(req: Request, date_from: str | None = Query(None, alias="from"),
+                      date_to: str | None = Query(None, alias="to"), basis: str = "auto"):
+    """总览：分广告网络汇总。默认不是 /revenues 的产品/代码位日明细。"""
+    _basis(basis)
+    if not date_from or not date_to:
+        raise ApiError(40001, 400, "from and to are required (YYYY-MM-DD)")
+    s, e = _dates(date_from, date_to)
+    if (dt.date.fromisoformat(e) - dt.date.fromisoformat(s)).days > 399:
+        raise ApiError(40001, 400, "range must be <= 400 days")
+    from overview import load_overview
+    return ok(load_overview(s, e, basis, today=_today(req), settlement_items=_settle_items(req),
+                            gromore=_gromore(req), live_items=getattr(req.app.state, "pangle_live_items", None)))
+
+
+@router.get("/revenues/overview/cards")
+def revenues_cards(req: Request, basis: str = "auto"):
+    """昨日 / 近7日 / 本月 / 上月（上海日历，预估不含今天）。"""
+    _basis(basis)
+    from overview import load_cards
+    return ok(load_cards(_today(req), basis, settlement_items=_settle_items(req), gromore=_gromore(req),
+                         live_items=getattr(req.app.state, "pangle_live_items", None)))
 
 
 @router.get("/reconcile/summaries")
@@ -289,3 +342,105 @@ async def credentials_patch(req: Request, channel: str):
 @router.delete("/credentials/{channel}")
 def credentials_delete(req: Request, channel: str):
     return ok(_cred(req.app.state.credentials.delete, channel))
+
+
+# ---- 结算单（v0.6 · 手工，DATA_DIR/settlements.json，鉴权与其它写接口相同）----
+def _settle_call(fn, *a):
+    try:
+        return fn(*a)
+    except st.SettlementError as e:
+        raise ApiError(e.code, e.http, e.msg)
+
+
+def _settle_view(items, period, status, ad_network, postable):
+    if period is not None and not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", period):
+        raise ApiError(40001, 400, "period must be YYYY-MM")
+    _enum(status, ("settled", "paid"), "settlement_status")
+    net = st._network_field(ad_network) if ad_network else None
+    out = []
+    for i in items:
+        if period and i.get("period") != period:
+            continue
+        if status and i.get("settlement_status") != status:
+            continue
+        if ad_network and i.get("ad_network") != net:
+            continue
+        if postable and (i.get("settlement_status") not in ("settled", "paid") or not i.get("evidence_ref")
+                         or not isinstance(i.get("amount_fen"), int) or isinstance(i.get("amount_fen"), bool)):
+            continue
+        out.append(st.public_settlement(i))
+    return out
+
+
+@router.get("/settlements")
+def settlements_list(req: Request, period: str | None = None, settlement_status: str | None = None,
+                     ad_network: str | None = None, postable: bool = False, page: int = 1, page_size: int = 50):
+    """postable=true：已签订/已支付且有证据，供 holiday 入账拉取。estimated 不会出现。"""
+    try:
+        items = _settle_view(_settle_items(req), period, settlement_status, ad_network, postable)
+    except st.SettlementError as e:
+        raise ApiError(e.code, e.http, e.msg)
+    return ok(_page(items, page, page_size))
+
+
+@router.post("/settlements")
+async def settlements_create(req: Request):
+    try:
+        body = await req.json()
+    except Exception:
+        raise ApiError(40001, 400, "body must be JSON")
+    return ok(_settle_call(req.app.state.settlements.create, body))
+
+
+def _csv_items(text: str) -> list[dict]:
+    rows = []
+    for row in csv.DictReader(io.StringIO(text)):
+        item = {}
+        for k, v in row.items():
+            if not k:
+                continue
+            key = k.strip().lower()
+            val = (v or "").strip()
+            if key == "amount_fen":
+                if not re.fullmatch(r"\d+", val or ""):
+                    raise ApiError(40001, 400, "amount_fen must be int fen")
+                item[key] = int(val)
+            elif key in ("paid_date", "settlement_id", "ad_network") and val == "":
+                item[key] = None
+            elif val != "":
+                item[key] = val
+        if item:
+            rows.append(item)
+    return rows
+
+
+@router.post("/settlements/import")
+async def settlements_import(req: Request):
+    raw = await req.body()
+    if len(raw) > 1_000_000:
+        raise ApiError(40001, 400, "body too large")
+    ctype = req.headers.get("content-type", "")
+    if "json" in ctype or (raw[:1] in (b"{", b"[")):
+        try:
+            obj = json.loads(raw.decode("utf-8"))
+        except Exception:
+            raise ApiError(40001, 400, "body must be JSON or CSV")
+        rows = obj.get("items") if isinstance(obj, dict) else obj
+        if not isinstance(rows, list):
+            raise ApiError(40001, 400, "body must be {\"items\":[]} or a CSV")
+    else:
+        try:
+            rows = _csv_items(raw.decode("utf-8-sig"))
+        except UnicodeDecodeError:
+            raise ApiError(40001, 400, "CSV must be utf-8")
+    return ok(_settle_call(req.app.state.settlements.import_rows, rows))
+
+
+@router.patch("/settlements/{settlement_id}")
+async def settlements_patch(req: Request, settlement_id: str):
+    """settled → paid（收款核销）。不能从 paid 退回 settled，也不能写成 estimated。"""
+    try:
+        body = await req.json()
+    except Exception:
+        raise ApiError(40001, 400, "body must be JSON")
+    return ok(_settle_call(req.app.state.settlements.patch, settlement_id, body))
