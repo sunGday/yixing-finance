@@ -135,16 +135,16 @@
 `Authorization: Bearer <FIN_API_TOKEN>`；角色 `viewer|operator|admin`；读接口 viewer+，rebuild 需 operator+。正式方案未定，**jack 先 fixtures / mock，勿绑死登录流**。
 
 ## 4. 收入适配器（代码：`adapters/`）
-- `get_adapter("pangle"|"ylh"|"gdt")`；`build_request()` 仅 dry-run（`verified:false`）；`fetch()` 抛 NotImplementedError。
-- **穿山甲**：URL / 参数 / md5 签名 均 **待复核**（未经官方文档核实）。env `PANGLE_USER_ID` `PANGLE_ROLE_ID` `PANGLE_SECURE_KEY`。
-- **优量汇**：URL `api.adnet.qq.com/...` / token 算法 **待复核**。env `YLH_MEMBER_ID` `YLH_SECRET`（兼容 `GDT_*`）。
+- `get_adapter("pangle"|"ylh"|"gdt")`。默认 `dry_run=True` 时 `fetch()` 不发 HTTP。
+- **穿山甲（v0.5.1 已接只读收入）**：`GET https://open-api.csjplatform.com/union_media/open_api/rt/income`。查询参数与 `csj-cli report income` 一致（`region=cn`，`date` 或 `start_date`+`end_date`，`time_zone=8`，`currency=cny`，`version=2.0`，`sign_type=MD5`，`timestamp` Unix 秒，`current_time` 上海时间）。签名 `md5(按 key 排序的 k=v&… + security_key)`。env `PANGLE_USER_ID` `PANGLE_ROLE_ID` `PANGLE_SECURE_KEY`（别名 `CSJ_MEDIA_ID` `CSJ_ROLE_ID` `CSJ_SECURITY_KEY`）。`revenue` 元 → `amount_fen`。
+- **优量汇**：URL `api.adnet.qq.com/...` / token 算法 **待复核**，仍不发真实 HTTP。env `YLH_MEMBER_ID` `YLH_SECRET`（兼容 `GDT_*`）。
 - 充值源：`sources/omni_billhis.py` 复用 `oppo_omni.finance.to_txn`，只读。
 - 参考：OpenMediation OM-ADC、Revenue-Recon（仅借鉴公开设计）。
 
 ## 实现差异（v0.3 实装）
 - `/recharges` 每行多 `side`（`omni_parent_in|platform_direct|transfer_out|reclaim_in`）与 `to_owner_name`；`data` 附 basis 字段与 `source`。可传 `side=` 过滤。
 - `/recharges/summary` 增 `total_amount_fen`（仅主口径）、`side_items[]`（旁报，不并入）。
-- `/revenues` 增 `source`(mock|live)、`verified:false`、`gap_flags`、`auth_note`；`strict=true` 无凭证 → 50301。
+- `/revenues` 增 `source`(mock|live|mixed|empty)、`verified`、`gap_flags`、`auth_note`，以及 `date=YYYY-MM-DD`（等同 start=end）。`strict=true` 或 `FIN_REVENUE_MOCK=0` 仅当所请求的**每个**网络都缺凭证时 50301；穿山甲有 live 行、优量汇缺失 → 200 + `credential_missing:ylh`。
 - `/reconcile/summaries` 仅 `granularity=day`；mock 收入不参与对账。v0.4：fund_equation 两行——
   ① `owner:1001108443` 代理商树口径（代理商自身余额**无 Omni 读接口** → `agency_balance_unavailable` + open/close 缺口）；
   ② `subs:1001108443` 子户口径：Δ子户余额合计(快照) = 划拨−划回−消耗+平台直充(调整)。快照为取数时刻非日终，首个快照(2026-11-04)前无历史 → `open_balance_missing`。

@@ -8,7 +8,7 @@ from adapters.base import normalize_network, SETTLEMENT_STATUS
 from reconcile import RECON_TABS, agency_daily, revenue_dedup, gross_profit_draft, daily_fund_equation
 import store as st
 
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 router = APIRouter(prefix="/api/v1")
 
 
@@ -99,22 +99,47 @@ def _revenues(ad_network, settlement_status, s, e, strict=False):
         except ValueError as x: raise ApiError(40002, 400, str(x))
     _enum(settlement_status, SETTLEMENT_STATUS, "settlement_status")
     allow_mock = os.environ.get("FIN_REVENUE_MOCK", "1") != "0" and not strict
-    items, gaps, notes = st.load_revenues(nets, allow_mock=allow_mock)
-    if not allow_mock and any(g.startswith("credential_missing") for g in gaps):
-        raise ApiError(50301, 503, "CredentialMissingError", {"gap_flags": gaps, "auth_note": notes})
+    items, gaps, notes = st.load_revenues(nets, allow_mock=allow_mock, start=s, end=e)
+    # 503 仅当所请求的每一个网络都缺凭证。穿山甲有数、优量汇缺失 → 200 + gap，不整页失败。
+    if not allow_mock:
+        missing = {g.split(":", 1)[1] for g in gaps if g.startswith("credential_missing:")}
+        if missing and set(nets) <= missing:
+            raise ApiError(50301, 503, "CredentialMissingError", {"gap_flags": gaps, "auth_note": notes})
     items = [i for i in items if (not s or i["stat_date"] >= s) and (not e or i["stat_date"] <= e)
              and (not settlement_status or i["settlement_status"] == settlement_status)]
     return items, gaps, notes
 
 
+def _revenue_source(items):
+    kinds = {i.get("source") for i in items}
+    if not items:
+        return "empty"
+    if "live" in kinds and "mock" in kinds:
+        return "mixed"
+    if "live" in kinds:
+        return "live"
+    return "mock"
+
+
 @router.get("/revenues")
-def revenues(start_date: str | None = None, end_date: str | None = None, ad_network: str | None = None,
-             settlement_status: str | None = None, strict: bool = False, page: int = 1, page_size: int = 50):
+def revenues(start_date: str | None = None, end_date: str | None = None, date: str | None = None,
+             ad_network: str | None = None, settlement_status: str | None = None, strict: bool = False,
+             page: int = 1, page_size: int = 50):
+    if date:
+        date = _date(date, "date")
+        if start_date is None and end_date is None:
+            start_date = end_date = date
+        elif (start_date and start_date != date) or (end_date and end_date != date):
+            raise ApiError(40001, 400, "date conflicts with start_date/end_date")
+        else:
+            start_date = start_date or date
+            end_date = end_date or date
     s, e = _dates(start_date, end_date)
     items, gaps, notes = _revenues(ad_network, settlement_status, s, e, strict)
+    bad = ("credential_missing:", "live_fetch_unverified:", "live_fetch_error:")
+    verified = bool(items) and all(i.get("verified") for i in items) and not any(g.startswith(bad) for g in gaps)
     d = _page(items, page, page_size)
-    d.update(source="mock" if any(i.get("source") == "mock" for i in items) else "live", verified=False,
-             gap_flags=gaps, auth_note=notes)
+    d.update(source=_revenue_source(items), verified=verified, gap_flags=gaps, auth_note=notes)
     return ok(d)
 
 

@@ -96,24 +96,51 @@ MOCK_REVENUE_RAW = {
 }
 
 
-def load_revenues(networks=("pangle", "ylh"), env=None, allow_mock=True):
-    """returns (items, gap_flags, auth_notes). No creds → mock items tagged source=mock (never claimed live)."""
+def _append_mock(items, ad, network):
+    for raw in MOCK_REVENUE_RAW[network]:
+        d = asdict(ad.map_row(raw, raw["date"], evidence_ref="mock-fixture"))
+        d.update(source="mock", verified=False)
+        items.append(d)
+
+
+def load_revenues(networks=("pangle", "ylh"), env=None, allow_mock=True, start=None, end=None):
+    """returns (items, gap_flags, auth_notes).
+
+    无凭证且 allow_mock：source=mock，并记 credential_missing。
+    有凭证且适配器 live_supported：真拉。失败只记 live_fetch_error，不把 mock 当成 live。
+    有凭证但适配器仍是骨架（优量汇）：live_fetch_unverified，allow_mock 时仍给 mock。
+    某一网缺失不代表其它网不能返回。
+    """
     env = os.environ if env is None else env
     items, gaps, notes = [], [], {}
     for n in networks:
-        ad = get_adapter(n, env=env)
+        ad = get_adapter(n, env=env, dry_run=False)
         try:
             ad.credentials()
-            # creds present but live fetch not verified (endpoint/sign 待复核) → explicit gap, no fake success
-            gaps.append(f"live_fetch_unverified:{n}"); notes[n] = "creds present; live fetch disabled (endpoint/sign 待复核)"
         except CredentialMissingError as e:
-            gaps.append(f"credential_missing:{n}"); notes[n] = f"CredentialMissing(50301): {e}"
-            if not allow_mock:
-                continue
-        if allow_mock:
-            for raw in MOCK_REVENUE_RAW[n]:
-                d = asdict(ad.map_row(raw, raw["date"], evidence_ref="mock-fixture"))
-                d.update(source="mock", verified=False); items.append(d)
+            gaps.append(f"credential_missing:{n}")
+            notes[n] = f"CredentialMissing(50301): {e}"
+            if allow_mock:
+                _append_mock(items, ad, n)
+            continue
+        if not getattr(ad, "live_supported", False):
+            gaps.append(f"live_fetch_unverified:{n}")
+            notes[n] = "creds present; live fetch disabled (endpoint/sign 待复核)"
+            if allow_mock:
+                _append_mock(items, ad, n)
+            continue
+        try:
+            rows = ad.fetch(start, end)
+        except Exception as e:
+            gaps.append(f"live_fetch_error:{n}")
+            notes[n] = f"live fetch failed: {type(e).__name__}: {str(e).replace(chr(10), ' ')[:180]}"
+            continue
+        for r in rows:
+            d = r.to_dict()
+            d.update(source="live", verified=True)
+            items.append(d)
+        note = getattr(ad, "fetch_note", None)
+        notes[n] = note or "live csj rt/income"
     return items, gaps, notes
 
 
