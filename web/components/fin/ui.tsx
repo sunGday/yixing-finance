@@ -47,7 +47,7 @@ export function PageHeader({ title, unit, from, to, badge = "只读", status }: 
 }
 
 export function Kpi({ label, value, hint, tone, size = "md", className }: {
-  label: string; value: React.ReactNode; hint?: string; tone?: "danger" | "warning"; size?: "lg" | "md" | "sm"; className?: string;
+  label: string; value: React.ReactNode; hint?: string; tone?: "danger" | "warning" | "success"; size?: "lg" | "md" | "sm"; className?: string;
 }) {
   return (
     <div className={cn(
@@ -55,6 +55,7 @@ export function Kpi({ label, value, hint, tone, size = "md", className }: {
       size === "lg" && "px-4 py-3",
       tone === "danger" && "border-danger/40 bg-danger-bg/40",
       tone === "warning" && "border-warning/40 bg-warning-bg/50",
+      tone === "success" && "border-success/40 bg-success-bg/60",
       className,
     )}>
       <div className="text-[11px] text-muted-foreground">{label}</div>
@@ -64,6 +65,7 @@ export function Kpi({ label, value, hint, tone, size = "md", className }: {
         size === "md" && "text-[22px]",
         size === "sm" && "text-[18px]",
         tone === "danger" && "text-danger",
+        tone === "success" && "text-success",
       )}>{value}</div>
       {hint && <div className="text-[11px] text-muted-foreground mt-1 truncate">{hint}</div>}
     </div>
@@ -104,17 +106,17 @@ export function Responsive({ table, cards }: { table: React.ReactNode; cards: Re
   );
 }
 
-export function DayBars({ series }: { series: { day: string; recharge: number; cost: number }[] }) {
-  const max = Math.max(1, ...series.map((s) => Math.max(s.recharge, s.cost)));
+export function DayBars({ series, cost = true }: { series: { day: string; recharge: number; cost?: number }[]; cost?: boolean }) {
+  const max = Math.max(1, ...series.map((s) => Math.max(s.recharge, cost ? (s.cost ?? 0) : 0)));
   return (
     <figure>
-      <figcaption className="sr-only">按日充值与消耗，单位与页眉一致</figcaption>
-      <div className="flex items-end gap-1.5 h-28" role="img" aria-label="充值与消耗柱">
+      <figcaption className="sr-only">{cost ? "按日充值与消耗，单位与页眉一致" : "按日代理商充值，单位与页眉一致"}</figcaption>
+      <div className="flex items-end gap-1.5 h-28" role="img" aria-label={cost ? "充值与消耗柱" : "代理商充值柱"}>
         {series.map((s) => (
           <div key={s.day} className="flex-1 min-w-0 flex flex-col items-center gap-1">
             <div className="flex items-end justify-center gap-0.5 h-24 w-full">
               <div className="w-2 rounded-sm bg-[#2563eb] dark:bg-[#60a5fa]" style={{ height: s.recharge > 0 ? `${Math.max(4, (s.recharge / max) * 100)}%` : "0%" }} title={`${s.day} 充值`} />
-              <div className="w-2 rounded-sm bg-[#93c5fd]" style={{ height: s.cost > 0 ? `${Math.max(4, (s.cost / max) * 100)}%` : "0%" }} title={`${s.day} 消耗`} />
+              {cost ? <div className="w-2 rounded-sm bg-[#93c5fd]" style={{ height: (s.cost ?? 0) > 0 ? `${Math.max(4, ((s.cost ?? 0) / max) * 100)}%` : "0%" }} title={`${s.day} 消耗`} /> : null}
             </div>
             <span className="text-[10px] text-muted-foreground tabular-nums">{s.day.slice(5)}</span>
           </div>
@@ -122,7 +124,7 @@ export function DayBars({ series }: { series: { day: string; recharge: number; c
       </div>
       <div className="mt-2 flex gap-3 text-[11px] text-muted-foreground">
         <span className="inline-flex items-center gap-1"><span className="size-2 rounded-sm bg-[#2563eb] dark:bg-[#60a5fa]" />充值</span>
-        <span className="inline-flex items-center gap-1"><span className="size-2 rounded-sm bg-[#93c5fd]" />消耗</span>
+        {cost ? <span className="inline-flex items-center gap-1"><span className="size-2 rounded-sm bg-[#93c5fd]" />消耗</span> : null}
       </div>
     </figure>
   );

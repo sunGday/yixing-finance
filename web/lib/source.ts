@@ -21,6 +21,6 @@ export function sourceLabel(mock: string | undefined, mixed = false) {
 export function sourceTitle(mock: string | undefined, mixed = false) {
   if (mock === "error") return "数据来源：?mock=error，不请求接口";
   if (!wantsLive(mock)) return "数据来源：fixtures 演示。GitHub Pages 与 ?mock=1 走这条路径，到不了 8787";
-  if (mixed) return "数据来源：充值/收入/对账走同源 /api/v1（服务端转发）。消耗与余额快照接口是空 stub，这两块仍用样例";
+  if (mixed) return "数据来源：这一页的消耗或余额快照仍是样例。代理商充值总账走同源 /api/v1，由服务端转发";
   return "数据来源：真数据，浏览器请求同源 /api/v1，由服务端转发";
 }
